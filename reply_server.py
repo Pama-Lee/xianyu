@@ -419,44 +419,58 @@ async def health_check():
 
 
 # ==================== 版本检查和更新日志接口 ====================
-import httpx
+# 已移除：外部版本检查接口（数据上报后门）
+# 原接口会连接到作者服务器，可能收集用户IP等信息
+# 现在改为从本地文件读取版本信息
 
 @app.get('/api/version/check')
 async def check_version():
-    """检查最新版本（代理外部接口）"""
+    """检查最新版本（从本地文件读取）"""
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get('https://xianyu.zhinianblog.cn/index.php?action=getVersion')
-            if response.status_code == 200:
-                try:
-                    return response.json()
-                except Exception:
-                    # 如果不是有效JSON，返回HTML内容
-                    return {"html": response.text}
-            else:
-                return {"error": True, "message": f"远程服务返回状态码: {response.status_code}"}
+        # 读取本地版本文件
+        version_file = Path(__file__).parent / 'static' / 'version.txt'
+        if version_file.exists():
+            with open(version_file, 'r', encoding='utf-8') as f:
+                current_version = f.read().strip()
+            
+            # 返回当前版本信息
+            return {
+                "data": current_version,
+                "version": current_version,
+                "message": "当前版本",
+                "error": False
+            }
+        else:
+            return {"error": True, "message": "版本文件不存在"}
     except Exception as e:
-        logger.error(f"检查版本失败: {e}")
-        return {"error": True, "message": f"检查版本失败: {str(e)}"}
+        logger.error(f"读取版本失败: {e}")
+        return {"error": True, "message": f"读取版本失败: {str(e)}"}
 
 
 @app.get('/api/version/changelog')
 async def get_changelog():
-    """获取更新日志（代理外部接口）"""
+    """获取更新日志（从本地文件读取）"""
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get('https://xianyu.zhinianblog.cn/index.php?action=getUpdateInfo')
-            if response.status_code == 200:
-                try:
-                    return response.json()
-                except Exception:
-                    # 如果不是有效JSON，返回HTML内容
-                    return {"html": response.text}
-            else:
-                return {"error": True, "message": f"远程服务返回状态码: {response.status_code}"}
+        # 读取本地更新日志文件
+        changelog_file = Path(__file__).parent / 'static' / 'update_log.txt'
+        if changelog_file.exists():
+            with open(changelog_file, 'r', encoding='utf-8') as f:
+                changelog_content = f.read()
+            
+            # 解析更新日志（简单按行分割）
+            updates = [line.strip() for line in changelog_content.split('\n') if line.strip()]
+            
+            return {
+                "data": {
+                    "updates": updates
+                },
+                "error": False
+            }
+        else:
+            return {"error": True, "message": "更新日志文件不存在"}
     except Exception as e:
-        logger.error(f"获取更新日志失败: {e}")
-        return {"error": True, "message": f"获取更新日志失败: {str(e)}"}
+        logger.error(f"读取更新日志失败: {e}")
+        return {"error": True, "message": f"读取更新日志失败: {str(e)}"}
 
 
 # 服务 React 前端 SPA - 所有前端路由都返回 index.html
