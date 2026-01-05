@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { 
-  Search, Send, Image, Zap, User, Clock, ChevronLeft, 
-  Loader2, AlertCircle, Wifi, WifiOff, MoreVertical, Tag
+  Search, Send, Image, Zap, User, 
+  Loader2, Wifi, WifiOff
 } from 'lucide-react'
 import { 
   getBuyers, getChatMessages, sendChatMessage, markMessagesRead, 
@@ -14,7 +14,7 @@ import { useUIStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { PageLoading } from '@/components/common/Loading'
 import { Select } from '@/components/common/Select'
-import { useChat, wsMessageToChatMessage } from '@/hooks/useChat'
+import { useChat, wsMessageToChatMessage, type WebSocketMessage } from '@/hooks/useChat'
 import type { Account } from '@/types'
 
 export function Workbench() {
@@ -47,7 +47,7 @@ export function Workbench() {
   // WebSocket 连接
   const { isConnected } = useChat({
     cookieId: selectedAccount || undefined,
-    onNewMessage: useCallback((wsMsg) => {
+    onNewMessage: useCallback((wsMsg: WebSocketMessage) => {
       // 如果是当前选中买家的消息，添加到消息列表
       if (selectedBuyer && wsMsg.buyer_id === selectedBuyer.buyer_id) {
         const newMessage = wsMessageToChatMessage(wsMsg)

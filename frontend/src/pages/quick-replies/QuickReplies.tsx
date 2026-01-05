@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Edit2, Trash2, X, Zap, Loader2, FolderOpen, Tag } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Zap, Loader2, FolderOpen } from 'lucide-react'
 import { 
   getQuickReplies, getQuickReplyCategories, 
   createQuickReply, updateQuickReply, deleteQuickReply,

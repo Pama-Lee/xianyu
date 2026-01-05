@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { ChatMessage } from '@/api/chat'
 
-interface WebSocketMessage {
+export interface WebSocketMessage {
   type: 'new_message' | 'pong' | string
   cookie_id?: string
   chat_id?: string

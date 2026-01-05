@@ -31,6 +31,7 @@ export interface Account {
   use_default_reply: boolean
   auto_confirm: boolean
   note?: string
+  remark?: string
   pause_duration?: number
   created_at?: string
   updated_at?: string

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Search, MessageCircle, User, Package, Tag, Clock, ChevronRight, RefreshCw } from 'lucide-react'
+import { Search, MessageCircle, User, Package, Clock, ChevronRight, RefreshCw } from 'lucide-react'
 import { getBuyers, type Buyer } from '@/api/chat'
 import { getAccounts } from '@/api/accounts'
 import { useUIStore } from '@/store/uiStore'
