@@ -151,6 +151,24 @@ export interface DeliveryRule {
   updated_at?: string
 }
 
+// 商品卡券绑定相关类型
+export interface ItemCardBinding {
+  id?: number
+  cookie_id: string
+  item_id: string
+  card_id: number
+  card_name?: string
+  card_type?: string
+  spec_name?: string
+  spec_value?: string
+  enabled: boolean
+  priority?: number
+  delivery_count?: number
+  item_title?: string
+  created_at?: string
+  updated_at?: string
+}
+
 // 通知渠道相关类型
 export interface NotificationChannel {
   id: string

@@ -4202,6 +4202,149 @@ def delete_delivery_rule(rule_id: int, current_user: Dict[str, Any] = Depends(ge
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 商品卡券绑定 API ====================
+
+@app.get("/bindings")
+def get_all_bindings(
+    cookie_id: str = None,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取所有绑定（可按账号筛选）"""
+    try:
+        from db_manager import db_manager
+        bindings = db_manager.get_all_bindings(cookie_id)
+        return {"success": True, "data": bindings}
+    except Exception as e:
+        logger.error(f"获取绑定列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/items/{cookie_id}/{item_id}/bindings")
+def get_item_bindings(
+    cookie_id: str,
+    item_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取商品的绑定列表"""
+    try:
+        from db_manager import db_manager
+        bindings = db_manager.get_item_bindings(cookie_id, item_id)
+        return {"success": True, "data": bindings}
+    except Exception as e:
+        logger.error(f"获取商品绑定失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/items/{cookie_id}/{item_id}/bindings")
+def create_item_binding(
+    cookie_id: str,
+    item_id: str,
+    binding_data: dict,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """为商品创建绑定"""
+    try:
+        from db_manager import db_manager
+        
+        card_id = binding_data.get('card_id')
+        if not card_id:
+            raise HTTPException(status_code=400, detail="card_id 是必填字段")
+        
+        binding_id = db_manager.create_item_card_binding(
+            cookie_id=cookie_id,
+            item_id=item_id,
+            card_id=card_id,
+            spec_name=binding_data.get('spec_name'),
+            spec_value=binding_data.get('spec_value'),
+            enabled=binding_data.get('enabled', True),
+            priority=binding_data.get('priority', 0)
+        )
+        
+        if binding_id:
+            return {"success": True, "id": binding_id, "message": "绑定创建成功"}
+        else:
+            raise HTTPException(status_code=400, detail="绑定已存在或创建失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建商品绑定失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/bindings/{binding_id}")
+def update_binding(
+    binding_id: int,
+    binding_data: dict,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """更新绑定"""
+    try:
+        from db_manager import db_manager
+        
+        success = db_manager.update_item_card_binding(
+            binding_id=binding_id,
+            card_id=binding_data.get('card_id'),
+            spec_name=binding_data.get('spec_name'),
+            spec_value=binding_data.get('spec_value'),
+            enabled=binding_data.get('enabled'),
+            priority=binding_data.get('priority')
+        )
+        
+        if success:
+            return {"success": True, "message": "绑定更新成功"}
+        else:
+            raise HTTPException(status_code=404, detail="绑定不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新绑定失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/bindings/{binding_id}")
+def delete_binding(
+    binding_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """删除绑定"""
+    try:
+        from db_manager import db_manager
+        
+        success = db_manager.delete_item_card_binding(binding_id)
+        
+        if success:
+            return {"success": True, "message": "绑定删除成功"}
+        else:
+            raise HTTPException(status_code=404, detail="绑定不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除绑定失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/bindings/{binding_id}")
+def get_binding_detail(
+    binding_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取绑定详情"""
+    try:
+        from db_manager import db_manager
+        
+        binding = db_manager.get_binding_by_id(binding_id)
+        
+        if binding:
+            return {"success": True, "data": binding}
+        else:
+            raise HTTPException(status_code=404, detail="绑定不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取绑定详情失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== 备份和恢复 API ====================
 
 @app.get("/backup/export")

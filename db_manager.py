@@ -316,6 +316,29 @@ class DBManager:
             )
             ''')
 
+            # 创建商品卡券绑定表（直接绑定模式）
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS item_card_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cookie_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                card_id INTEGER NOT NULL,
+                spec_name TEXT,
+                spec_value TEXT,
+                enabled BOOLEAN DEFAULT TRUE,
+                priority INTEGER DEFAULT 0,
+                delivery_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE,
+                UNIQUE(cookie_id, item_id, spec_name, spec_value)
+            )
+            ''')
+
+            # 创建绑定表索引
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_bindings_item ON item_card_bindings(cookie_id, item_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_bindings_spec ON item_card_bindings(cookie_id, item_id, spec_name, spec_value)')
+
             # 创建默认回复表
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS default_replies (
@@ -5188,6 +5211,341 @@ class DBManager:
         except Exception as e:
             logger.error(f"清理历史数据时出错: {e}")
             return {'error': str(e)}
+
+    # ==================== 商品卡券绑定相关方法 ====================
+
+    def get_card_by_item_binding(self, cookie_id: str, item_id: str, 
+                                  spec_name: str = None, spec_value: str = None):
+        """根据商品ID直接查询绑定的卡券（优先精确匹配规格）"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 优先匹配：商品ID + 规格（如果提供了规格信息）
+                if spec_name and spec_value:
+                    cursor.execute('''
+                    SELECT b.id, b.cookie_id, b.item_id, b.card_id, b.spec_name, b.spec_value,
+                           b.enabled, b.priority, b.delivery_count, b.created_at, b.updated_at,
+                           c.name as card_name, c.type as card_type, c.api_config,
+                           c.text_content, c.data_content, c.image_url, c.description as card_description,
+                           c.delay_seconds, c.enabled as card_enabled
+                    FROM item_card_bindings b
+                    LEFT JOIN cards c ON b.card_id = c.id
+                    WHERE b.cookie_id = ? AND b.item_id = ? 
+                      AND b.spec_name = ? AND b.spec_value = ?
+                      AND b.enabled = 1 AND c.enabled = 1
+                    ORDER BY b.priority DESC
+                    LIMIT 1
+                    ''', (cookie_id, item_id, spec_name, spec_value))
+                    
+                    row = cursor.fetchone()
+                    if row:
+                        return self._parse_binding_row(row)
+                
+                # 兜底匹配：仅商品ID（无规格或规格不匹配时）
+                cursor.execute('''
+                SELECT b.id, b.cookie_id, b.item_id, b.card_id, b.spec_name, b.spec_value,
+                       b.enabled, b.priority, b.delivery_count, b.created_at, b.updated_at,
+                       c.name as card_name, c.type as card_type, c.api_config,
+                       c.text_content, c.data_content, c.image_url, c.description as card_description,
+                       c.delay_seconds, c.enabled as card_enabled
+                FROM item_card_bindings b
+                LEFT JOIN cards c ON b.card_id = c.id
+                WHERE b.cookie_id = ? AND b.item_id = ?
+                  AND (b.spec_name IS NULL OR b.spec_name = '')
+                  AND b.enabled = 1 AND c.enabled = 1
+                ORDER BY b.priority DESC
+                LIMIT 1
+                ''', (cookie_id, item_id))
+                
+                row = cursor.fetchone()
+                if row:
+                    return self._parse_binding_row(row)
+                
+                return None
+                
+            except Exception as e:
+                logger.error(f"查询商品绑定失败: {e}")
+                return None
+
+    def _parse_binding_row(self, row):
+        """解析绑定查询结果"""
+        import json
+        
+        api_config = row[13]
+        if api_config:
+            try:
+                api_config = json.loads(api_config)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        return {
+            'id': row[0],
+            'cookie_id': row[1],
+            'item_id': row[2],
+            'card_id': row[3],
+            'spec_name': row[4],
+            'spec_value': row[5],
+            'enabled': bool(row[6]),
+            'priority': row[7],
+            'delivery_count': row[8],
+            'created_at': row[9],
+            'updated_at': row[10],
+            'card_name': row[11],
+            'card_type': row[12],
+            'api_config': api_config,
+            'text_content': row[14],
+            'data_content': row[15],
+            'image_url': row[16],
+            'card_description': row[17],
+            'card_delay_seconds': row[18],
+            'card_enabled': bool(row[19]) if row[19] is not None else True
+        }
+
+    def create_item_card_binding(self, cookie_id: str, item_id: str, card_id: int,
+                                  spec_name: str = None, spec_value: str = None,
+                                  enabled: bool = True, priority: int = 0):
+        """创建商品卡券绑定"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 处理空字符串为 NULL
+                spec_name = spec_name if spec_name else None
+                spec_value = spec_value if spec_value else None
+                
+                cursor.execute('''
+                INSERT INTO item_card_bindings 
+                (cookie_id, item_id, card_id, spec_name, spec_value, enabled, priority)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (cookie_id, item_id, card_id, spec_name, spec_value, enabled, priority))
+                
+                self.conn.commit()
+                binding_id = cursor.lastrowid
+                logger.info(f"创建商品绑定成功: item_id={item_id}, card_id={card_id}, binding_id={binding_id}")
+                return binding_id
+                
+            except sqlite3.IntegrityError as e:
+                if "UNIQUE constraint failed" in str(e):
+                    logger.warning(f"绑定已存在: item_id={item_id}, spec={spec_name}:{spec_value}")
+                    return None
+                raise
+            except Exception as e:
+                logger.error(f"创建商品绑定失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def update_item_card_binding(self, binding_id: int, card_id: int = None,
+                                  spec_name: str = None, spec_value: str = None,
+                                  enabled: bool = None, priority: int = None):
+        """更新商品卡券绑定"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                update_fields = []
+                params = []
+                
+                if card_id is not None:
+                    update_fields.append("card_id = ?")
+                    params.append(card_id)
+                if spec_name is not None:
+                    update_fields.append("spec_name = ?")
+                    params.append(spec_name if spec_name else None)
+                if spec_value is not None:
+                    update_fields.append("spec_value = ?")
+                    params.append(spec_value if spec_value else None)
+                if enabled is not None:
+                    update_fields.append("enabled = ?")
+                    params.append(enabled)
+                if priority is not None:
+                    update_fields.append("priority = ?")
+                    params.append(priority)
+                
+                if not update_fields:
+                    return False
+                
+                update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(binding_id)
+                
+                sql = f"UPDATE item_card_bindings SET {', '.join(update_fields)} WHERE id = ?"
+                cursor.execute(sql, params)
+                self.conn.commit()
+                
+                success = cursor.rowcount > 0
+                if success:
+                    logger.info(f"更新商品绑定成功: binding_id={binding_id}")
+                return success
+                
+            except Exception as e:
+                logger.error(f"更新商品绑定失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def delete_item_card_binding(self, binding_id: int):
+        """删除商品卡券绑定"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM item_card_bindings WHERE id = ?", (binding_id,))
+                self.conn.commit()
+                
+                success = cursor.rowcount > 0
+                if success:
+                    logger.info(f"删除商品绑定成功: binding_id={binding_id}")
+                return success
+                
+            except Exception as e:
+                logger.error(f"删除商品绑定失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def get_item_bindings(self, cookie_id: str, item_id: str):
+        """获取商品的所有绑定"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT b.id, b.cookie_id, b.item_id, b.card_id, b.spec_name, b.spec_value,
+                       b.enabled, b.priority, b.delivery_count, b.created_at, b.updated_at,
+                       c.name as card_name, c.type as card_type
+                FROM item_card_bindings b
+                LEFT JOIN cards c ON b.card_id = c.id
+                WHERE b.cookie_id = ? AND b.item_id = ?
+                ORDER BY b.priority DESC, b.id ASC
+                ''', (cookie_id, item_id))
+                
+                bindings = []
+                for row in cursor.fetchall():
+                    bindings.append({
+                        'id': row[0],
+                        'cookie_id': row[1],
+                        'item_id': row[2],
+                        'card_id': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'enabled': bool(row[6]),
+                        'priority': row[7],
+                        'delivery_count': row[8],
+                        'created_at': row[9],
+                        'updated_at': row[10],
+                        'card_name': row[11],
+                        'card_type': row[12]
+                    })
+                
+                return bindings
+                
+            except Exception as e:
+                logger.error(f"获取商品绑定列表失败: {e}")
+                return []
+
+    def get_all_bindings(self, cookie_id: str = None):
+        """获取所有绑定（可按账号筛选）"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                if cookie_id:
+                    cursor.execute('''
+                    SELECT b.id, b.cookie_id, b.item_id, b.card_id, b.spec_name, b.spec_value,
+                           b.enabled, b.priority, b.delivery_count, b.created_at, b.updated_at,
+                           c.name as card_name, c.type as card_type,
+                           i.item_title
+                    FROM item_card_bindings b
+                    LEFT JOIN cards c ON b.card_id = c.id
+                    LEFT JOIN item_info i ON b.cookie_id = i.cookie_id AND b.item_id = i.item_id
+                    WHERE b.cookie_id = ?
+                    ORDER BY b.updated_at DESC
+                    ''', (cookie_id,))
+                else:
+                    cursor.execute('''
+                    SELECT b.id, b.cookie_id, b.item_id, b.card_id, b.spec_name, b.spec_value,
+                           b.enabled, b.priority, b.delivery_count, b.created_at, b.updated_at,
+                           c.name as card_name, c.type as card_type,
+                           i.item_title
+                    FROM item_card_bindings b
+                    LEFT JOIN cards c ON b.card_id = c.id
+                    LEFT JOIN item_info i ON b.cookie_id = i.cookie_id AND b.item_id = i.item_id
+                    ORDER BY b.updated_at DESC
+                    ''')
+                
+                bindings = []
+                for row in cursor.fetchall():
+                    bindings.append({
+                        'id': row[0],
+                        'cookie_id': row[1],
+                        'item_id': row[2],
+                        'card_id': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'enabled': bool(row[6]),
+                        'priority': row[7],
+                        'delivery_count': row[8],
+                        'created_at': row[9],
+                        'updated_at': row[10],
+                        'card_name': row[11],
+                        'card_type': row[12],
+                        'item_title': row[13]
+                    })
+                
+                return bindings
+                
+            except Exception as e:
+                logger.error(f"获取所有绑定失败: {e}")
+                return []
+
+    def increment_binding_delivery_count(self, binding_id: int):
+        """增加绑定的发货计数"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                UPDATE item_card_bindings 
+                SET delivery_count = delivery_count + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''', (binding_id,))
+                self.conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"更新绑定发货计数失败: {e}")
+                return False
+
+    def get_binding_by_id(self, binding_id: int):
+        """根据ID获取绑定详情"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT b.id, b.cookie_id, b.item_id, b.card_id, b.spec_name, b.spec_value,
+                       b.enabled, b.priority, b.delivery_count, b.created_at, b.updated_at,
+                       c.name as card_name, c.type as card_type
+                FROM item_card_bindings b
+                LEFT JOIN cards c ON b.card_id = c.id
+                WHERE b.id = ?
+                ''', (binding_id,))
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'id': row[0],
+                        'cookie_id': row[1],
+                        'item_id': row[2],
+                        'card_id': row[3],
+                        'spec_name': row[4],
+                        'spec_value': row[5],
+                        'enabled': bool(row[6]),
+                        'priority': row[7],
+                        'delivery_count': row[8],
+                        'created_at': row[9],
+                        'updated_at': row[10],
+                        'card_name': row[11],
+                        'card_type': row[12]
+                    }
+                return None
+                
+            except Exception as e:
+                logger.error(f"获取绑定详情失败: {e}")
+                return None
 
 
 # 全局单例

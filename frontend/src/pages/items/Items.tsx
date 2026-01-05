@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
+import { CheckSquare, Download, Edit2, ExternalLink, Link, Loader2, Package, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
 import { batchDeleteItems, deleteItem, fetchAllItemsFromAccount, getItems, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec } from '@/api/items'
 import { getAccounts } from '@/api/accounts'
+import { getItemBindings, createBinding, deleteBinding } from '@/api/bindings'
+import { getCards, type CardData } from '@/api/cards'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
 import { Select } from '@/components/common/Select'
-import type { Account, Item } from '@/types'
+import type { Account, Item, ItemCardBinding } from '@/types'
 
 export function Items() {
   const { addToast } = useUIStore()
@@ -23,6 +25,16 @@ export function Items() {
   const [editingItem, setEditingItem] = useState<Item | null>(null)
   const [editDetail, setEditDetail] = useState('')
   const [editSaving, setEditSaving] = useState(false)
+
+  // 绑定弹窗状态
+  const [bindingItem, setBindingItem] = useState<Item | null>(null)
+  const [itemBindings, setItemBindings] = useState<ItemCardBinding[]>([])
+  const [cards, setCards] = useState<CardData[]>([])
+  const [bindingCardId, setBindingCardId] = useState('')
+  const [bindingSpecName, setBindingSpecName] = useState('')
+  const [bindingSpecValue, setBindingSpecValue] = useState('')
+  const [bindingSaving, setBindingSaving] = useState(false)
+  const [bindingsLoading, setBindingsLoading] = useState(false)
 
   const loadItems = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) {
@@ -173,6 +185,108 @@ export function Items() {
     setEditDetail(item.item_detail || item.desc || '')
   }
 
+  // 加载卡券列表
+  const loadCards = async () => {
+    try {
+      const result = await getCards()
+      if (result.success) {
+        setCards(result.data || [])
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 打开绑定弹窗
+  const handleOpenBinding = async (item: Item) => {
+    setBindingItem(item)
+    setBindingCardId('')
+    setBindingSpecName('')
+    setBindingSpecValue('')
+    setBindingsLoading(true)
+
+    // 加载卡券列表
+    if (cards.length === 0) {
+      await loadCards()
+    }
+
+    // 加载该商品的绑定列表
+    try {
+      const result = await getItemBindings(item.cookie_id, item.item_id)
+      if (result.success) {
+        setItemBindings(result.data || [])
+      }
+    } catch {
+      addToast({ type: 'error', message: '加载绑定信息失败' })
+    } finally {
+      setBindingsLoading(false)
+    }
+  }
+
+  // 创建绑定
+  const handleCreateBinding = async () => {
+    if (!bindingItem || !bindingCardId) {
+      addToast({ type: 'warning', message: '请选择要绑定的卡券' })
+      return
+    }
+
+    setBindingSaving(true)
+    try {
+      const result = await createBinding(bindingItem.cookie_id, bindingItem.item_id, {
+        card_id: parseInt(bindingCardId),
+        spec_name: bindingSpecName || undefined,
+        spec_value: bindingSpecValue || undefined,
+        enabled: true,
+      })
+
+      if (result.success) {
+        addToast({ type: 'success', message: '绑定创建成功' })
+        // 重新加载绑定列表
+        const refreshResult = await getItemBindings(bindingItem.cookie_id, bindingItem.item_id)
+        if (refreshResult.success) {
+          setItemBindings(refreshResult.data || [])
+        }
+        // 清空表单
+        setBindingCardId('')
+        setBindingSpecName('')
+        setBindingSpecValue('')
+      } else {
+        addToast({ type: 'error', message: result.message || '绑定创建失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '绑定创建失败' })
+    } finally {
+      setBindingSaving(false)
+    }
+  }
+
+  // 删除绑定
+  const handleDeleteBinding = async (bindingId: number) => {
+    if (!confirm('确定要删除这个绑定吗？')) return
+
+    try {
+      const result = await deleteBinding(bindingId)
+      if (result.success) {
+        addToast({ type: 'success', message: '绑定删除成功' })
+        // 从列表中移除
+        setItemBindings(prev => prev.filter(b => b.id !== bindingId))
+      } else {
+        addToast({ type: 'error', message: '删除失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '删除失败' })
+    }
+  }
+
+  // 关闭绑定弹窗
+  const handleCloseBinding = () => {
+    setBindingItem(null)
+    setItemBindings([])
+    setBindingCardId('')
+    setBindingSpecName('')
+    setBindingSpecValue('')
+  }
+
   // 保存编辑
   const handleSaveEdit = async () => {
     if (!editingItem) return
@@ -312,6 +426,7 @@ export function Items() {
                 <th className="whitespace-nowrap">商品ID</th>
                 <th className="whitespace-nowrap">商品标题</th>
                 <th className="whitespace-nowrap">价格</th>
+                <th className="whitespace-nowrap">发货绑定</th>
                 <th className="whitespace-nowrap">多规格</th>
                 <th className="whitespace-nowrap">多数量发货</th>
                 <th className="whitespace-nowrap">更新时间</th>
@@ -321,7 +436,7 @@ export function Items() {
             <tbody>
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state py-8">
                       <Package className="empty-state-icon" />
                       <p className="text-gray-500">暂无商品数据</p>
@@ -373,6 +488,16 @@ export function Items() {
                     </td>
                     <td className="text-amber-600 font-medium">
                       {item.item_price || (item.price ? `¥${item.price}` : '-')}
+                    </td>
+                    <td>
+                      <button
+                        onClick={() => handleOpenBinding(item)}
+                        className="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400 transition-colors flex items-center gap-1"
+                        title="配置发货绑定"
+                      >
+                        <Link className="w-3 h-3" />
+                        绑定
+                      </button>
                     </td>
                     <td>
                       <button
@@ -489,6 +614,163 @@ export function Items() {
                   </span>
                 ) : (
                   '保存'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 绑定弹窗 */}
+      {bindingItem && (
+        <div className="modal-overlay">
+          <div className="modal-content max-w-2xl">
+            <div className="modal-header">
+              <h2 className="modal-title">配置发货绑定</h2>
+              <button onClick={handleCloseBinding} className="modal-close">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              {/* 商品信息 */}
+              <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                <div className="text-sm text-gray-500 dark:text-gray-400">商品信息</div>
+                <div className="font-medium mt-1">{bindingItem.item_title || bindingItem.title || bindingItem.item_id}</div>
+                <div className="text-xs text-gray-400 mt-1">ID: {bindingItem.item_id}</div>
+              </div>
+
+              {/* 现有绑定列表 */}
+              <div>
+                <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  已绑定的卡券 ({itemBindings.length})
+                </div>
+                {bindingsLoading ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                    <span className="ml-2 text-gray-500">加载中...</span>
+                  </div>
+                ) : itemBindings.length === 0 ? (
+                  <div className="text-center py-4 text-gray-400 text-sm">
+                    暂无绑定，请在下方添加
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {itemBindings.map((binding) => (
+                      <div
+                        key={binding.id}
+                        className="flex items-center justify-between p-3 bg-white dark:bg-slate-700 border border-gray-200 dark:border-gray-600 rounded-lg"
+                      >
+                        <div>
+                          <div className="font-medium text-gray-900 dark:text-white">
+                            {binding.card_name || `卡券 #${binding.card_id}`}
+                          </div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {binding.card_type && (
+                              <span className={`inline-block px-1.5 py-0.5 rounded mr-2 ${
+                                binding.card_type === 'api' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' :
+                                binding.card_type === 'text' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                                binding.card_type === 'data' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                                'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                              }`}>
+                                {binding.card_type === 'api' ? 'API' :
+                                 binding.card_type === 'text' ? '文本' :
+                                 binding.card_type === 'data' ? '批量' : '图片'}
+                              </span>
+                            )}
+                            {binding.spec_name && binding.spec_value && (
+                              <span className="text-purple-600 dark:text-purple-400">
+                                规格: {binding.spec_name}={binding.spec_value}
+                              </span>
+                            )}
+                            {!binding.spec_name && !binding.spec_value && (
+                              <span className="text-gray-400">通用绑定</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => binding.id && handleDeleteBinding(binding.id)}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                          title="删除绑定"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 添加新绑定 */}
+              <div className="border-t pt-4">
+                <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                  添加新绑定
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="input-group md:col-span-2">
+                    <label className="input-label">选择卡券 <span className="text-red-500">*</span></label>
+                    <Select
+                      value={bindingCardId}
+                      onChange={setBindingCardId}
+                      options={[
+                        { value: '', label: '请选择卡券' },
+                        ...cards.filter(c => c.enabled !== false).map((card) => ({
+                          value: String(card.id),
+                          label: `${card.name} (${
+                            card.type === 'api' ? 'API' :
+                            card.type === 'text' ? '文本' :
+                            card.type === 'data' ? '批量' : '图片'
+                          })`,
+                        })),
+                      ]}
+                      placeholder="请选择卡券"
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">规格名称 <span className="text-gray-400 text-xs">(可选)</span></label>
+                    <input
+                      type="text"
+                      value={bindingSpecName}
+                      onChange={(e) => setBindingSpecName(e.target.value)}
+                      className="input-ios"
+                      placeholder="如: 颜色、尺寸、时长等"
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">规格值 <span className="text-gray-400 text-xs">(可选)</span></label>
+                    <input
+                      type="text"
+                      value={bindingSpecValue}
+                      onChange={(e) => setBindingSpecValue(e.target.value)}
+                      className="input-ios"
+                      placeholder="如: 红色、大号、月卡等"
+                    />
+                  </div>
+                </div>
+                <div className="mt-3 text-xs text-gray-500">
+                  提示：如果商品有多个规格，可以为每个规格创建独立的绑定；不填规格则作为通用绑定。
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                onClick={handleCloseBinding}
+                className="btn-ios-secondary"
+              >
+                关闭
+              </button>
+              <button
+                onClick={handleCreateBinding}
+                className="btn-ios-primary"
+                disabled={bindingSaving || !bindingCardId}
+              >
+                {bindingSaving ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    保存中...
+                  </span>
+                ) : (
+                  '添加绑定'
                 )}
               </button>
             </div>

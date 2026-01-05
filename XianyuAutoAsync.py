@@ -4487,7 +4487,7 @@ class XianyuLive:
                 return None
 
     async def _auto_delivery(self, item_id: str, item_title: str = None, order_id: str = None, send_user_id: str = None):
-        """自动发货功能 - 获取卡券规则，执行延时，确认发货，发送内容"""
+        """自动发货功能 - 优先使用直接绑定，兜底使用关键字匹配"""
         try:
             from db_manager import db_manager
 
@@ -4553,52 +4553,80 @@ class XianyuLive:
             if not search_text:
                 search_text = item_id or "未知商品"
 
-            logger.info(f"使用搜索文本匹配发货规则: {search_text[:100]}...")
-
             # 检查商品是否为多规格商品
             is_multi_spec = db_manager.get_item_multi_spec_status(self.cookie_id, item_id)
             spec_name = None
             spec_value = None
 
-            # 如果是多规格商品且有订单ID，获取规格信息
-            if is_multi_spec and order_id:
-                logger.info(f"检测到多规格商品，获取订单规格信息: {order_id}")
+            # 如果有订单ID，获取规格信息（无论是否多规格，都尝试获取用于直接绑定匹配）
+            if order_id:
+                logger.info(f"获取订单规格信息: {order_id}")
                 try:
                     order_detail = await self.fetch_order_detail_info(order_id, item_id, send_user_id)
-                    # 确保order_detail是字典类型
                     if order_detail and isinstance(order_detail, dict):
                         spec_name = order_detail.get('spec_name', '')
                         spec_value = order_detail.get('spec_value', '')
                         if spec_name and spec_value:
                             logger.info(f"获取到规格信息: {spec_name} = {spec_value}")
-                        else:
-                            logger.warning(f"未能获取到规格信息，将跳过自动发货")
-                            return None
-                    else:
-                        logger.warning(f"获取订单详情失败（返回类型: {type(order_detail).__name__}），将跳过自动发货")
-                        return None
                 except Exception as e:
-                    logger.error(f"获取订单规格信息失败: {self._safe_str(e)}，将跳过自动发货")
-                    return None
+                    logger.warning(f"获取订单规格信息失败: {self._safe_str(e)}")
+
+            # ==================== 优先级1: 直接绑定模式 ====================
+            logger.info(f"🔍 尝试直接绑定模式: item_id={item_id}, spec={spec_name}:{spec_value}")
+            binding = db_manager.get_card_by_item_binding(
+                cookie_id=self.cookie_id,
+                item_id=item_id,
+                spec_name=spec_name,
+                spec_value=spec_value
+            )
+
+            if binding:
+                logger.info(f"✅ 【直接绑定】找到绑定: {item_id} -> {binding['card_name']} ({binding['card_type']})")
+                
+                # 使用绑定的卡券信息构造 rule 对象，复用后续的发货逻辑
+                rule = {
+                    'id': binding['id'],
+                    'keyword': f"[直接绑定] {item_id}",
+                    'card_id': binding['card_id'],
+                    'card_name': binding['card_name'],
+                    'card_type': binding['card_type'],
+                    'api_config': binding['api_config'],
+                    'text_content': binding['text_content'],
+                    'data_content': binding['data_content'],
+                    'image_url': binding['image_url'],
+                    'card_description': binding['card_description'],
+                    'card_delay_seconds': binding['card_delay_seconds'],
+                    'is_multi_spec': bool(binding['spec_name']),
+                    'spec_name': binding['spec_name'],
+                    'spec_value': binding['spec_value'],
+                    'binding_id': binding['id']  # 标记这是绑定模式
+                }
+                
+                # 跳转到发货流程（跳过关键字匹配）
+                return await self._process_delivery_rule(rule, item_id, search_text, order_id, send_user_id, spec_name, spec_value)
+
+            # ==================== 优先级2: 关键字匹配模式（兜底） ====================
+            logger.info(f"⚠️ 未找到直接绑定，使用关键字匹配模式: {search_text[:100]}...")
+
+            # 多规格商品必须有规格信息才能匹配
+            if is_multi_spec and (not spec_name or not spec_value):
+                logger.warning(f"❌ 多规格商品但无规格信息，跳过自动发货")
+                return None
 
             # 智能匹配发货规则：多规格商品只匹配多规格卡券，非多规格商品只匹配非多规格卡券
             delivery_rules = []
 
             if is_multi_spec:
                 # 多规格商品：只匹配多规格发货规则
-                if spec_name and spec_value:
-                    logger.info(f"多规格商品，尝试匹配多规格发货规则: {search_text[:50]}... [{spec_name}:{spec_value}]")
-                    delivery_rules = db_manager.get_delivery_rules_by_keyword_and_spec(search_text, spec_name, spec_value)
-                    # 过滤只保留多规格卡券
-                    delivery_rules = [r for r in delivery_rules if r.get('is_multi_spec')]
-                    
-                    if delivery_rules:
-                        logger.info(f"✅ 找到匹配的多规格发货规则: {len(delivery_rules)}个")
-                    else:
-                        logger.warning(f"❌ 多规格商品未找到匹配的多规格发货规则，跳过自动发货")
-                        return None
+                logger.info(f"多规格商品，尝试匹配多规格发货规则: {search_text[:50]}... [{spec_name}:{spec_value}]")
+                delivery_rules = db_manager.get_delivery_rules_by_keyword_and_spec(search_text, spec_name, spec_value)
+                # 过滤只保留多规格卡券
+                delivery_rules = [r for r in delivery_rules if r.get('is_multi_spec')]
+                
+                if delivery_rules:
+                    logger.info(f"✅ 找到匹配的多规格发货规则: {len(delivery_rules)}个")
                 else:
-                    logger.warning(f"❌ 多规格商品但无规格信息，跳过自动发货")
+                    logger.warning(f"❌ 多规格商品未找到匹配的多规格发货规则，跳过自动发货")
                     return None
             else:
                 # 非多规格商品：只匹配非多规格发货规则
@@ -4776,6 +4804,144 @@ class XianyuLive:
 
         except Exception as e:
             logger.error(f"自动发货失败: {self._safe_str(e)}")
+            return None
+
+    async def _process_delivery_rule(self, rule, item_id, search_text, order_id, send_user_id, spec_name, spec_value):
+        """处理发货规则（直接绑定和关键字匹配共用）"""
+        try:
+            from db_manager import db_manager
+            
+            # 保存商品信息到数据库（需要有商品标题才保存）
+            item_title_for_save = None
+            try:
+                db_item_info = db_manager.get_item_info(self.cookie_id, item_id)
+                if db_item_info:
+                    item_title_for_save = db_item_info.get('item_title', '').strip()
+            except:
+                pass
+
+            if item_title_for_save:
+                await self.save_item_info_to_db(item_id, search_text, item_title_for_save)
+            else:
+                logger.warning(f"跳过保存商品信息：缺少商品标题 - {item_id}")
+
+            # 详细的匹配结果日志
+            if rule.get('binding_id'):
+                logger.info(f"📌 使用直接绑定模式: {item_id} -> {rule['card_name']} ({rule['card_type']})")
+                if spec_name and spec_value:
+                    logger.info(f"📋 绑定规格: {rule.get('spec_name') or '无'}:{rule.get('spec_value') or '无'}")
+
+            # 获取延时设置
+            delay_seconds = rule.get('card_delay_seconds', 0)
+
+            # 执行延时
+            if delay_seconds and delay_seconds > 0:
+                logger.info(f"检测到发货延时设置: {delay_seconds}秒，开始延时...")
+                await asyncio.sleep(delay_seconds)
+                logger.info(f"延时完成")
+
+            # 如果有订单ID，执行确认发货
+            if order_id:
+                if not self.is_auto_confirm_enabled():
+                    logger.info(f"自动确认发货已关闭，跳过订单 {order_id}")
+                else:
+                    current_time = time.time()
+                    should_confirm = True
+
+                    if order_id in self.confirmed_orders:
+                        last_confirm_time = self.confirmed_orders[order_id]
+                        if current_time - last_confirm_time < self.order_confirm_cooldown:
+                            logger.info(f"订单 {order_id} 已在 {self.order_confirm_cooldown} 秒内确认过，跳过重复确认")
+                            should_confirm = False
+
+                    if should_confirm:
+                        logger.info(f"开始自动确认发货: 订单ID={order_id}, 商品ID={item_id}")
+                        confirm_result = await self.auto_confirm(order_id, item_id)
+                        if confirm_result.get('success'):
+                            self.confirmed_orders[order_id] = current_time
+                            logger.info(f"🎉 自动确认发货成功！订单ID: {order_id}")
+                        else:
+                            logger.warning(f"⚠️ 自动确认发货失败: {confirm_result.get('error', '未知错误')}")
+
+            # 处理发货内容
+            if order_id:
+                # 保存订单基本信息到数据库
+                try:
+                    cookie_info = db_manager.get_cookie_by_id(self.cookie_id)
+                    if not cookie_info:
+                        logger.warning(f"Cookie ID {self.cookie_id} 不存在于cookies表中，丢弃订单 {order_id}")
+                    else:
+                        existing_order = db_manager.get_order_by_id(order_id)
+                        if not existing_order:
+                            success = db_manager.insert_or_update_order(
+                                order_id=order_id,
+                                item_id=item_id,
+                                buyer_id=send_user_id,
+                                cookie_id=self.cookie_id
+                            )
+                            
+                            if success and self.order_status_handler:
+                                try:
+                                    self.order_status_handler.handle_order_basic_info_status(
+                                        order_id=order_id,
+                                        cookie_id=self.cookie_id,
+                                        context="自动发货-直接绑定"
+                                    )
+                                except Exception as e:
+                                    logger.error(f"【{self.cookie_id}】订单状态处理器调用失败: {self._safe_str(e)}")
+                            
+                            if success:
+                                logger.info(f"保存基本订单信息到数据库: {order_id}")
+                except Exception as db_e:
+                    logger.error(f"保存基本订单信息失败: {self._safe_str(db_e)}")
+
+                # 开始处理发货内容
+                logger.info(f"开始处理发货内容，绑定: {item_id} -> {rule['card_name']} ({rule['card_type']})")
+
+                delivery_content = None
+
+                # 根据卡券类型处理发货内容
+                if rule['card_type'] == 'api':
+                    delivery_content = await self._get_api_card_content(rule, order_id, item_id, send_user_id, spec_name, spec_value)
+
+                elif rule['card_type'] == 'text':
+                    delivery_content = rule['text_content']
+
+                elif rule['card_type'] == 'data':
+                    delivery_content = db_manager.consume_batch_data(rule['card_id'])
+
+                elif rule['card_type'] == 'image':
+                    image_url = rule.get('image_url')
+                    if image_url:
+                        delivery_content = f"__IMAGE_SEND__{rule['card_id']}|{image_url}"
+                        logger.info(f"准备发送图片: {image_url} (卡券ID: {rule['card_id']})")
+                    else:
+                        logger.error(f"图片卡券缺少图片URL: 卡券ID={rule['card_id']}")
+                        delivery_content = None
+
+                if delivery_content:
+                    final_content = self._process_delivery_content_with_description(delivery_content, rule.get('card_description', ''))
+
+                    # 增加发货次数统计
+                    if rule.get('binding_id'):
+                        # 直接绑定模式：更新绑定计数
+                        db_manager.increment_binding_delivery_count(rule['binding_id'])
+                        logger.info(f"自动发货成功(直接绑定): binding_id={rule['binding_id']}, 内容长度={len(final_content)}")
+                    else:
+                        # 关键字模式：更新规则计数
+                        db_manager.increment_delivery_times(rule['id'])
+                        logger.info(f"自动发货成功(关键字匹配): 规则ID={rule['id']}, 内容长度={len(final_content)}")
+                    
+                    return final_content
+                else:
+                    logger.warning(f"获取发货内容失败: {item_id} -> {rule['card_name']}")
+                    return None
+            else:
+                logger.info(f"⚠️ 未检测到订单ID，跳过发货内容处理。绑定: {item_id} -> {rule['card_name']} ({rule['card_type']})")
+                return None
+
+        except Exception as e:
+            logger.error(f"处理发货规则失败: {self._safe_str(e)}")
             return None
 
 
