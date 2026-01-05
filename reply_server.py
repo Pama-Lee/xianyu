@@ -5114,13 +5114,13 @@ class BatchDeleteRequest(BaseModel):
 
 class AIReplySettings(BaseModel):
     ai_enabled: bool
-    model_name: str = "qwen-plus"
-    api_key: str = ""
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model_name: Optional[str] = None  # None表示使用系统设置
+    api_key: Optional[str] = None  # None表示使用系统设置
+    base_url: Optional[str] = None  # None表示使用系统设置
     max_discount_percent: int = 10
     max_discount_amount: int = 100
     max_bargain_rounds: int = 3
-    custom_prompts: str = ""
+    custom_prompts: Optional[str] = None
 
 
 @app.delete("/items/batch")
@@ -5186,12 +5186,43 @@ def update_ai_reply_settings(cookie_id: str, settings: AIReplySettings, current_
         if cookie_manager.manager is None:
             raise HTTPException(status_code=500, detail='CookieManager 未就绪')
 
-        # 保存设置
-        settings_dict = settings.dict()
+        # 获取当前设置，用于保留未传的字段
+        current_settings = db_manager.get_ai_reply_settings(cookie_id)
+        
+        # 构建要保存的设置，只更新明确传入的字段
+        settings_dict = {
+            'ai_enabled': settings.ai_enabled,
+            'max_discount_percent': settings.max_discount_percent,
+            'max_discount_amount': settings.max_discount_amount,
+            'max_bargain_rounds': settings.max_bargain_rounds,
+        }
+        
+        # 对于可选字段，如果传入None则保留原值（不覆盖）
+        # 如果传入空字符串则清空（使用系统设置）
+        # 如果传入有效值则更新
+        if settings.model_name is not None:
+            settings_dict['model_name'] = settings.model_name if settings.model_name else ''
+        else:
+            settings_dict['model_name'] = current_settings.get('model_name', '')
+            
+        if settings.api_key is not None:
+            settings_dict['api_key'] = settings.api_key if settings.api_key else ''
+        else:
+            settings_dict['api_key'] = current_settings.get('api_key', '')
+            
+        if settings.base_url is not None:
+            settings_dict['base_url'] = settings.base_url if settings.base_url else ''
+        else:
+            settings_dict['base_url'] = current_settings.get('base_url', '')
+            
+        if settings.custom_prompts is not None:
+            settings_dict['custom_prompts'] = settings.custom_prompts
+        else:
+            settings_dict['custom_prompts'] = current_settings.get('custom_prompts', '')
+
         success = db_manager.save_ai_reply_settings(cookie_id, settings_dict)
 
         if success:
-
             # 如果启用了AI回复，记录日志
             if settings.ai_enabled:
                 logger.info(f"账号 {cookie_id} 启用AI回复")

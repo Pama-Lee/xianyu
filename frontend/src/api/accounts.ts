@@ -166,17 +166,29 @@ export const getAIReplySettings = (cookieId: string): Promise<AIReplySettings> =
 
 // 更新AI回复设置
 export const updateAIReplySettings = (cookieId: string, settings: Partial<AIReplySettings>): Promise<ApiResponse> => {
-  // 转换字段名以匹配后端
+  // 只发送明确提供的字段，不覆盖未传的字段
+  // api_key 和 base_url 如果为空或未提供，后端会从系统设置中读取
   const payload: Record<string, unknown> = {
     ai_enabled: settings.ai_enabled ?? settings.enabled ?? false,
-    model_name: settings.model_name ?? 'qwen-plus',
-    api_key: settings.api_key ?? '',
-    base_url: settings.base_url ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     max_discount_percent: settings.max_discount_percent ?? 10,
     max_discount_amount: settings.max_discount_amount ?? 100,
     max_bargain_rounds: settings.max_bargain_rounds ?? 3,
-    custom_prompts: settings.custom_prompts ?? '',
   }
+  
+  // 只有明确提供且非空的字段才发送，避免覆盖系统设置
+  if (settings.model_name !== undefined && settings.model_name !== '') {
+    payload.model_name = settings.model_name
+  }
+  if (settings.api_key !== undefined && settings.api_key !== '') {
+    payload.api_key = settings.api_key
+  }
+  if (settings.base_url !== undefined && settings.base_url !== '') {
+    payload.base_url = settings.base_url
+  }
+  if (settings.custom_prompts !== undefined) {
+    payload.custom_prompts = settings.custom_prompts
+  }
+  
   return put(`/ai-reply-settings/${cookieId}`, payload)
 }
 
