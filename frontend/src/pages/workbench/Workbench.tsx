@@ -59,19 +59,45 @@ export function Workbench() {
         }, 100)
       }
       
-      // 更新买家列表中的最后消息
-      setBuyers(prev => prev.map(b => {
-        if (b.buyer_id === wsMsg.buyer_id && b.cookie_id === wsMsg.cookie_id) {
-          return {
-            ...b,
-            last_message: wsMsg.message || b.last_message,
-            last_message_time: wsMsg.timestamp || b.last_message_time,
-            unread_count: b.buyer_id === selectedBuyer?.buyer_id ? b.unread_count : b.unread_count + 1
+      // 更新或添加买家到列表
+      setBuyers(prev => {
+        const existingIndex = prev.findIndex(
+          b => b.buyer_id === wsMsg.buyer_id && b.cookie_id === wsMsg.cookie_id
+        )
+        
+        if (existingIndex >= 0) {
+          // 更新已存在的买家
+          const updated = [...prev]
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            last_message: wsMsg.message || updated[existingIndex].last_message,
+            last_message_time: wsMsg.timestamp || updated[existingIndex].last_message_time,
+            unread_count: wsMsg.buyer_id === selectedBuyer?.buyer_id 
+              ? updated[existingIndex].unread_count 
+              : updated[existingIndex].unread_count + 1
           }
+          return updated
+        } else {
+          // 添加新买家到列表顶部
+          const newBuyer: Buyer = {
+            id: Date.now(),
+            cookie_id: wsMsg.cookie_id || selectedAccount || '',
+            buyer_id: wsMsg.buyer_id || '',
+            buyer_name: wsMsg.buyer_name || null,
+            buyer_avatar: wsMsg.buyer_avatar || null,
+            last_message: wsMsg.message || null,
+            last_message_time: wsMsg.timestamp || new Date().toISOString(),
+            unread_count: wsMsg.buyer_id === selectedBuyer?.buyer_id ? 0 : 1,
+            total_orders: 0,
+            tags: [],
+            notes: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }
+          return [newBuyer, ...prev]
         }
-        return b
-      }))
-    }, [selectedBuyer])
+      })
+    }, [selectedBuyer, selectedAccount])
   })
 
   // 加载账号列表
