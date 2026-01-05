@@ -18,6 +18,9 @@ import { MessageNotifications } from '@/pages/notifications/MessageNotifications
 import { Settings } from '@/pages/settings/Settings'
 import { ItemReplies } from '@/pages/item-replies/ItemReplies'
 import { ItemSearch } from '@/pages/search/ItemSearch'
+import { Buyers } from '@/pages/buyers/Buyers'
+import { Workbench } from '@/pages/workbench/Workbench'
+import { QuickReplies } from '@/pages/quick-replies/QuickReplies'
 import { Users } from '@/pages/admin/Users'
 import { Logs } from '@/pages/admin/Logs'
 import { RiskLogs } from '@/pages/admin/RiskLogs'
@@ -159,6 +162,9 @@ function App() {
           <Route path="notification-channels" element={<NotificationChannels />} />
           <Route path="message-notifications" element={<MessageNotifications />} />
           <Route path="item-search" element={<ItemSearch />} />
+          <Route path="buyers" element={<Buyers />} />
+          <Route path="workbench" element={<Workbench />} />
+          <Route path="quick-replies" element={<QuickReplies />} />
           <Route path="settings" element={<Settings />} />
           <Route path="disclaimer" element={<Disclaimer />} />
           <Route path="about" element={<About />} />

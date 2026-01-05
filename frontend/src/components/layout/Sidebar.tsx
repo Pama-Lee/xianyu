@@ -22,6 +22,9 @@ import {
   PanelLeftClose,
   PanelLeft,
   AlertTriangle,
+  Headphones,
+  Zap,
+  Contact,
 } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore'
 import { useUIStore } from '@/store/uiStore'
@@ -46,6 +49,9 @@ const mainNavItems: NavItem[] = [
   { icon: Bell, label: '通知渠道', path: '/notification-channels' },
   { icon: MessageCircle, label: '消息通知', path: '/message-notifications' },
   // { icon: Search, label: '商品搜索', path: '/item-search' },
+  { icon: Contact, label: '买家管理', path: '/buyers' },
+  { icon: Headphones, label: '聊天工作台', path: '/workbench' },
+  { icon: Zap, label: '快捷回复', path: '/quick-replies' },
   { icon: Settings, label: '系统设置', path: '/settings' },
 ]
 

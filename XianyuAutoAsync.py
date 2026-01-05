@@ -7694,7 +7694,12 @@ class XianyuLive:
             # 格式化消息时间
             msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(create_time/1000))
 
-
+            # 提取买家头像URL
+            buyer_avatar = None
+            try:
+                buyer_avatar = message_10.get("senderAvatar") or message_10.get("reminderTitlePic")
+            except:
+                pass
 
             # 判断消息方向
             if send_user_id == self.myid:
@@ -7703,9 +7708,85 @@ class XianyuLive:
                 # 暂停该chat_id的自动回复10分钟
                 pause_manager.pause_chat(chat_id, self.cookie_id)
 
+                # 保存卖家发出的消息到聊天记录
+                try:
+                    from db_manager import db_manager
+                    # 从chat_id提取买家ID（chat_id格式通常是 buyerId_itemId 或类似）
+                    # 需要从最近的对话中获取买家ID
+                    db_manager.save_chat_message(
+                        cookie_id=self.cookie_id,
+                        chat_id=chat_id,
+                        buyer_id=chat_id,  # 暂时用chat_id，后续会更新
+                        sender_type='seller',
+                        message_type='text',
+                        content=send_message,
+                        item_id=item_id
+                    )
+                except Exception as save_e:
+                    logger.warning(f"保存卖家消息失败: {self._safe_str(save_e)}")
+
                 return
             else:
                 logger.info(f"[{msg_time}] 【收到】用户: {send_user_name} (ID: {send_user_id}), 商品({item_id}): {send_message}")
+
+                # 💾 保存聊天消息和买家信息到数据库
+                try:
+                    from db_manager import db_manager
+                    
+                    # 判断消息类型
+                    msg_type = 'text'
+                    img_url = None
+                    if '[图片]' in send_message or send_message.startswith('http') and ('.jpg' in send_message or '.png' in send_message):
+                        msg_type = 'image'
+                        img_url = send_message if send_message.startswith('http') else None
+                    elif '[卡片消息]' in send_message:
+                        msg_type = 'card'
+                    elif '[订单]' in send_message or '已拍下' in send_message or '已付款' in send_message:
+                        msg_type = 'order'
+                    
+                    # 保存聊天消息
+                    db_manager.save_chat_message(
+                        cookie_id=self.cookie_id,
+                        chat_id=chat_id,
+                        buyer_id=send_user_id,
+                        sender_type='buyer',
+                        message_type=msg_type,
+                        content=send_message,
+                        item_id=item_id,
+                        image_url=img_url
+                    )
+                    
+                    # 更新买家信息
+                    db_manager.save_or_update_buyer(
+                        cookie_id=self.cookie_id,
+                        buyer_id=send_user_id,
+                        buyer_name=send_user_name,
+                        buyer_avatar=buyer_avatar,
+                        last_message=send_message[:100] if send_message else None,
+                        increment_unread=True
+                    )
+                    
+                    # 通过WebSocket Manager推送新消息到前端
+                    try:
+                        from ws_manager import ws_manager
+                        await ws_manager.broadcast_new_message(self.cookie_id, {
+                            'type': 'new_message',
+                            'cookie_id': self.cookie_id,
+                            'chat_id': chat_id,
+                            'buyer_id': send_user_id,
+                            'buyer_name': send_user_name,
+                            'buyer_avatar': buyer_avatar,
+                            'message': send_message,
+                            'message_type': msg_type,
+                            'item_id': item_id,
+                            'timestamp': msg_time
+                        })
+                    except Exception as ws_e:
+                        # WebSocket推送失败不影响主流程
+                        pass
+                        
+                except Exception as save_e:
+                    logger.warning(f"保存聊天消息失败: {self._safe_str(save_e)}")
 
                 # 🔔 立即发送消息通知（独立于自动回复功能）
                 # 检查是否为群组消息，如果是群组消息则跳过通知

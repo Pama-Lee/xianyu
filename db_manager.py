@@ -464,6 +464,64 @@ class DBManager:
             )
             ''')
 
+            # 创建买家信息表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS buyers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cookie_id TEXT NOT NULL,
+                buyer_id TEXT NOT NULL,
+                buyer_name TEXT,
+                buyer_avatar TEXT,
+                last_message TEXT,
+                last_message_time TIMESTAMP,
+                unread_count INTEGER DEFAULT 0,
+                total_orders INTEGER DEFAULT 0,
+                tags TEXT,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE,
+                UNIQUE(cookie_id, buyer_id)
+            )
+            ''')
+
+            # 创建聊天记录表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cookie_id TEXT NOT NULL,
+                chat_id TEXT NOT NULL,
+                buyer_id TEXT NOT NULL,
+                item_id TEXT,
+                sender_type TEXT NOT NULL,
+                message_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                image_url TEXT,
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (cookie_id) REFERENCES cookies(id) ON DELETE CASCADE
+            )
+            ''')
+
+            # 创建快捷回复模板表
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS quick_replies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                category TEXT DEFAULT '通用',
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            ''')
+
+            # 为聊天记录创建索引
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_cookie_buyer ON chat_messages(cookie_id, buyer_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_buyers_cookie_id ON buyers(cookie_id)')
+
             # 插入默认系统设置（不包括管理员密码，由reply_server.py初始化）
             cursor.execute('''
             INSERT OR IGNORE INTO system_settings (key, value, description) VALUES
@@ -5546,6 +5604,432 @@ class DBManager:
             except Exception as e:
                 logger.error(f"获取绑定详情失败: {e}")
                 return None
+
+    # ==================== 买家管理方法 ====================
+
+    def save_or_update_buyer(self, cookie_id: str, buyer_id: str, buyer_name: str = None, 
+                              buyer_avatar: str = None, last_message: str = None,
+                              increment_unread: bool = False):
+        """保存或更新买家信息"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 检查买家是否存在
+                cursor.execute(
+                    'SELECT id, unread_count FROM buyers WHERE cookie_id = ? AND buyer_id = ?',
+                    (cookie_id, buyer_id)
+                )
+                existing = cursor.fetchone()
+                
+                if existing:
+                    # 更新现有买家
+                    update_parts = ['updated_at = CURRENT_TIMESTAMP']
+                    params = []
+                    
+                    if buyer_name:
+                        update_parts.append('buyer_name = ?')
+                        params.append(buyer_name)
+                    if buyer_avatar:
+                        update_parts.append('buyer_avatar = ?')
+                        params.append(buyer_avatar)
+                    if last_message:
+                        update_parts.append('last_message = ?')
+                        update_parts.append('last_message_time = CURRENT_TIMESTAMP')
+                        params.append(last_message)
+                    if increment_unread:
+                        update_parts.append('unread_count = unread_count + 1')
+                    
+                    params.extend([cookie_id, buyer_id])
+                    
+                    cursor.execute(f'''
+                    UPDATE buyers SET {', '.join(update_parts)}
+                    WHERE cookie_id = ? AND buyer_id = ?
+                    ''', params)
+                else:
+                    # 插入新买家
+                    cursor.execute('''
+                    INSERT INTO buyers (cookie_id, buyer_id, buyer_name, buyer_avatar, 
+                                       last_message, last_message_time, unread_count)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    ''', (cookie_id, buyer_id, buyer_name, buyer_avatar, last_message, 
+                          1 if increment_unread else 0))
+                
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"保存买家信息失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def get_buyers(self, cookie_id: str = None, search: str = None, 
+                   page: int = 1, page_size: int = 50):
+        """获取买家列表"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                where_clauses = []
+                params = []
+                
+                if cookie_id:
+                    where_clauses.append('cookie_id = ?')
+                    params.append(cookie_id)
+                if search:
+                    where_clauses.append('(buyer_name LIKE ? OR buyer_id LIKE ?)')
+                    params.extend([f'%{search}%', f'%{search}%'])
+                
+                where_sql = 'WHERE ' + ' AND '.join(where_clauses) if where_clauses else ''
+                
+                # 获取总数
+                cursor.execute(f'SELECT COUNT(*) FROM buyers {where_sql}', params)
+                total = cursor.fetchone()[0]
+                
+                # 分页查询
+                offset = (page - 1) * page_size
+                cursor.execute(f'''
+                SELECT id, cookie_id, buyer_id, buyer_name, buyer_avatar, 
+                       last_message, last_message_time, unread_count, total_orders,
+                       tags, notes, created_at, updated_at
+                FROM buyers {where_sql}
+                ORDER BY last_message_time DESC NULLS LAST
+                LIMIT ? OFFSET ?
+                ''', params + [page_size, offset])
+                
+                buyers = []
+                for row in cursor.fetchall():
+                    buyers.append({
+                        'id': row[0],
+                        'cookie_id': row[1],
+                        'buyer_id': row[2],
+                        'buyer_name': row[3],
+                        'buyer_avatar': row[4],
+                        'last_message': row[5],
+                        'last_message_time': row[6],
+                        'unread_count': row[7],
+                        'total_orders': row[8],
+                        'tags': json.loads(row[9]) if row[9] else [],
+                        'notes': row[10],
+                        'created_at': row[11],
+                        'updated_at': row[12]
+                    })
+                
+                return {'buyers': buyers, 'total': total, 'page': page, 'page_size': page_size}
+            except Exception as e:
+                logger.error(f"获取买家列表失败: {e}")
+                return {'buyers': [], 'total': 0, 'page': page, 'page_size': page_size}
+
+    def get_buyer_by_id(self, cookie_id: str, buyer_id: str):
+        """获取单个买家详情"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT id, cookie_id, buyer_id, buyer_name, buyer_avatar, 
+                       last_message, last_message_time, unread_count, total_orders,
+                       tags, notes, created_at, updated_at
+                FROM buyers WHERE cookie_id = ? AND buyer_id = ?
+                ''', (cookie_id, buyer_id))
+                
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'id': row[0],
+                        'cookie_id': row[1],
+                        'buyer_id': row[2],
+                        'buyer_name': row[3],
+                        'buyer_avatar': row[4],
+                        'last_message': row[5],
+                        'last_message_time': row[6],
+                        'unread_count': row[7],
+                        'total_orders': row[8],
+                        'tags': json.loads(row[9]) if row[9] else [],
+                        'notes': row[10],
+                        'created_at': row[11],
+                        'updated_at': row[12]
+                    }
+                return None
+            except Exception as e:
+                logger.error(f"获取买家详情失败: {e}")
+                return None
+
+    def update_buyer(self, cookie_id: str, buyer_id: str, tags: list = None, notes: str = None):
+        """更新买家标签和备注"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                update_parts = ['updated_at = CURRENT_TIMESTAMP']
+                params = []
+                
+                if tags is not None:
+                    update_parts.append('tags = ?')
+                    params.append(json.dumps(tags))
+                if notes is not None:
+                    update_parts.append('notes = ?')
+                    params.append(notes)
+                
+                params.extend([cookie_id, buyer_id])
+                
+                cursor.execute(f'''
+                UPDATE buyers SET {', '.join(update_parts)}
+                WHERE cookie_id = ? AND buyer_id = ?
+                ''', params)
+                
+                self.conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"更新买家信息失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def mark_buyer_read(self, cookie_id: str, buyer_id: str):
+        """标记买家消息为已读"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                UPDATE buyers SET unread_count = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE cookie_id = ? AND buyer_id = ?
+                ''', (cookie_id, buyer_id))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"标记已读失败: {e}")
+                return False
+
+    def increment_buyer_orders(self, cookie_id: str, buyer_id: str):
+        """增加买家订单数"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                UPDATE buyers SET total_orders = total_orders + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE cookie_id = ? AND buyer_id = ?
+                ''', (cookie_id, buyer_id))
+                self.conn.commit()
+                return True
+            except Exception as e:
+                logger.error(f"更新订单数失败: {e}")
+                return False
+
+    # ==================== 聊天记录方法 ====================
+
+    def save_chat_message(self, cookie_id: str, chat_id: str, buyer_id: str,
+                          sender_type: str, message_type: str, content: str,
+                          item_id: str = None, image_url: str = None):
+        """保存聊天消息"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                INSERT INTO chat_messages (cookie_id, chat_id, buyer_id, item_id,
+                                          sender_type, message_type, content, image_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (cookie_id, chat_id, buyer_id, item_id, sender_type, 
+                      message_type, content, image_url))
+                self.conn.commit()
+                return cursor.lastrowid
+            except Exception as e:
+                logger.error(f"保存聊天消息失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def get_chat_messages(self, cookie_id: str, buyer_id: str, 
+                          page: int = 1, page_size: int = 50, before_id: int = None):
+        """获取聊天记录"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                where_sql = 'WHERE cookie_id = ? AND buyer_id = ?'
+                params = [cookie_id, buyer_id]
+                
+                if before_id:
+                    where_sql += ' AND id < ?'
+                    params.append(before_id)
+                
+                # 获取总数
+                cursor.execute(f'SELECT COUNT(*) FROM chat_messages {where_sql}', params)
+                total = cursor.fetchone()[0]
+                
+                # 分页查询（按时间倒序，最新的在前）
+                cursor.execute(f'''
+                SELECT id, cookie_id, chat_id, buyer_id, item_id, sender_type,
+                       message_type, content, image_url, is_read, created_at
+                FROM chat_messages {where_sql}
+                ORDER BY id DESC
+                LIMIT ?
+                ''', params + [page_size])
+                
+                messages = []
+                for row in cursor.fetchall():
+                    messages.append({
+                        'id': row[0],
+                        'cookie_id': row[1],
+                        'chat_id': row[2],
+                        'buyer_id': row[3],
+                        'item_id': row[4],
+                        'sender_type': row[5],
+                        'message_type': row[6],
+                        'content': row[7],
+                        'image_url': row[8],
+                        'is_read': row[9],
+                        'created_at': row[10]
+                    })
+                
+                # 返回时反转，让旧消息在前
+                messages.reverse()
+                
+                return {'messages': messages, 'total': total, 'has_more': total > len(messages)}
+            except Exception as e:
+                logger.error(f"获取聊天记录失败: {e}")
+                return {'messages': [], 'total': 0, 'has_more': False}
+
+    def mark_messages_read(self, cookie_id: str, buyer_id: str):
+        """标记消息为已读"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                UPDATE chat_messages SET is_read = TRUE
+                WHERE cookie_id = ? AND buyer_id = ? AND is_read = FALSE
+                ''', (cookie_id, buyer_id))
+                
+                # 同时更新买家的未读数
+                cursor.execute('''
+                UPDATE buyers SET unread_count = 0
+                WHERE cookie_id = ? AND buyer_id = ?
+                ''', (cookie_id, buyer_id))
+                
+                self.conn.commit()
+                return cursor.rowcount
+            except Exception as e:
+                logger.error(f"标记消息已读失败: {e}")
+                return 0
+
+    # ==================== 快捷回复方法 ====================
+
+    def get_quick_replies(self, user_id: int, category: str = None):
+        """获取快捷回复列表"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                if category:
+                    cursor.execute('''
+                    SELECT id, user_id, category, title, content, sort_order, created_at
+                    FROM quick_replies WHERE user_id = ? AND category = ?
+                    ORDER BY sort_order ASC, id ASC
+                    ''', (user_id, category))
+                else:
+                    cursor.execute('''
+                    SELECT id, user_id, category, title, content, sort_order, created_at
+                    FROM quick_replies WHERE user_id = ?
+                    ORDER BY category ASC, sort_order ASC, id ASC
+                    ''', (user_id,))
+                
+                replies = []
+                for row in cursor.fetchall():
+                    replies.append({
+                        'id': row[0],
+                        'user_id': row[1],
+                        'category': row[2],
+                        'title': row[3],
+                        'content': row[4],
+                        'sort_order': row[5],
+                        'created_at': row[6]
+                    })
+                return replies
+            except Exception as e:
+                logger.error(f"获取快捷回复失败: {e}")
+                return []
+
+    def create_quick_reply(self, user_id: int, title: str, content: str, 
+                           category: str = '通用', sort_order: int = 0):
+        """创建快捷回复"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                INSERT INTO quick_replies (user_id, category, title, content, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+                ''', (user_id, category, title, content, sort_order))
+                self.conn.commit()
+                return cursor.lastrowid
+            except Exception as e:
+                logger.error(f"创建快捷回复失败: {e}")
+                self.conn.rollback()
+                return None
+
+    def update_quick_reply(self, reply_id: int, user_id: int, 
+                           title: str = None, content: str = None,
+                           category: str = None, sort_order: int = None):
+        """更新快捷回复"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                update_parts = []
+                params = []
+                
+                if title is not None:
+                    update_parts.append('title = ?')
+                    params.append(title)
+                if content is not None:
+                    update_parts.append('content = ?')
+                    params.append(content)
+                if category is not None:
+                    update_parts.append('category = ?')
+                    params.append(category)
+                if sort_order is not None:
+                    update_parts.append('sort_order = ?')
+                    params.append(sort_order)
+                
+                if not update_parts:
+                    return False
+                
+                params.extend([reply_id, user_id])
+                
+                cursor.execute(f'''
+                UPDATE quick_replies SET {', '.join(update_parts)}
+                WHERE id = ? AND user_id = ?
+                ''', params)
+                
+                self.conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"更新快捷回复失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def delete_quick_reply(self, reply_id: int, user_id: int):
+        """删除快捷回复"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('DELETE FROM quick_replies WHERE id = ? AND user_id = ?', 
+                              (reply_id, user_id))
+                self.conn.commit()
+                return cursor.rowcount > 0
+            except Exception as e:
+                logger.error(f"删除快捷回复失败: {e}")
+                self.conn.rollback()
+                return False
+
+    def get_quick_reply_categories(self, user_id: int):
+        """获取用户的所有快捷回复分类"""
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                SELECT DISTINCT category FROM quick_replies WHERE user_id = ?
+                ORDER BY category ASC
+                ''', (user_id,))
+                return [row[0] for row in cursor.fetchall()]
+            except Exception as e:
+                logger.error(f"获取快捷回复分类失败: {e}")
+                return []
 
 
 # 全局单例

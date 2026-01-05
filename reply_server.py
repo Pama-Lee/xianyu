@@ -4398,6 +4398,351 @@ async def get_item_sku_info(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 买家管理 API ====================
+
+class BuyerUpdateRequest(BaseModel):
+    tags: Optional[List[str]] = None
+    notes: Optional[str] = None
+
+
+@app.get("/buyers")
+def get_buyers(
+    cookie_id: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取买家列表"""
+    try:
+        result = db_manager.get_buyers(
+            cookie_id=cookie_id,
+            search=search,
+            page=page,
+            page_size=page_size
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"获取买家列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/buyers/{cookie_id}/{buyer_id}")
+def get_buyer_detail(
+    cookie_id: str,
+    buyer_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取买家详情"""
+    try:
+        buyer = db_manager.get_buyer_by_id(cookie_id, buyer_id)
+        if buyer:
+            return {"success": True, "data": buyer}
+        else:
+            raise HTTPException(status_code=404, detail="买家不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取买家详情失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/buyers/{cookie_id}/{buyer_id}")
+def update_buyer(
+    cookie_id: str,
+    buyer_id: str,
+    data: BuyerUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """更新买家信息（标签/备注）"""
+    try:
+        success = db_manager.update_buyer(
+            cookie_id=cookie_id,
+            buyer_id=buyer_id,
+            tags=data.tags,
+            notes=data.notes
+        )
+        if success:
+            return {"success": True, "message": "更新成功"}
+        else:
+            raise HTTPException(status_code=404, detail="买家不存在或更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新买家信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 聊天消息 API ====================
+
+class SendMessageRequest(BaseModel):
+    message: str
+    message_type: str = "text"  # text / image
+    image_url: Optional[str] = None
+
+
+@app.get("/chat/{cookie_id}/{buyer_id}/messages")
+def get_chat_messages(
+    cookie_id: str,
+    buyer_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    before_id: Optional[int] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取聊天记录"""
+    try:
+        result = db_manager.get_chat_messages(
+            cookie_id=cookie_id,
+            buyer_id=buyer_id,
+            page=page,
+            page_size=page_size,
+            before_id=before_id
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"获取聊天记录失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/{cookie_id}/{buyer_id}/send")
+async def send_chat_message(
+    cookie_id: str,
+    buyer_id: str,
+    data: SendMessageRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """发送聊天消息"""
+    try:
+        from XianyuAutoAsync import XianyuLive
+        
+        # 获取账号cookie信息
+        cookie_info = db_manager.get_cookie_by_id(cookie_id)
+        if not cookie_info:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        
+        cookies_str = cookie_info.get('cookies_str', '')
+        if not cookies_str:
+            raise HTTPException(status_code=400, detail="账号cookie为空")
+        
+        # 查找正在运行的XianyuLive实例
+        xianyu_instance = XianyuLive.get_instance(cookie_id)
+        
+        if not xianyu_instance or not xianyu_instance.ws:
+            raise HTTPException(status_code=400, detail="账号未在线或WebSocket未连接，无法发送消息")
+        
+        # 发送消息
+        # 需要获取chat_id（从buyer_id构造或从最近的对话中获取）
+        chat_id = buyer_id  # 简化处理，实际可能需要查询
+        
+        if data.message_type == "text":
+            await xianyu_instance.send_msg(xianyu_instance.ws, chat_id, buyer_id, data.message)
+        elif data.message_type == "image" and data.image_url:
+            await xianyu_instance.send_image_msg(xianyu_instance.ws, chat_id, buyer_id, data.image_url)
+        else:
+            raise HTTPException(status_code=400, detail="无效的消息类型")
+        
+        # 保存消息到数据库
+        db_manager.save_chat_message(
+            cookie_id=cookie_id,
+            chat_id=chat_id,
+            buyer_id=buyer_id,
+            sender_type='seller',
+            message_type=data.message_type,
+            content=data.message if data.message_type == "text" else data.image_url,
+            image_url=data.image_url if data.message_type == "image" else None
+        )
+        
+        return {"success": True, "message": "消息发送成功"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"发送消息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat/{cookie_id}/{buyer_id}/read")
+def mark_messages_read(
+    cookie_id: str,
+    buyer_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """标记消息为已读"""
+    try:
+        count = db_manager.mark_messages_read(cookie_id, buyer_id)
+        return {"success": True, "marked_count": count}
+    except Exception as e:
+        logger.error(f"标记已读失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 快捷回复 API ====================
+
+class QuickReplyRequest(BaseModel):
+    title: str
+    content: str
+    category: str = "通用"
+    sort_order: int = 0
+
+
+class QuickReplyUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+@app.get("/quick-replies")
+def get_quick_replies(
+    category: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取快捷回复列表"""
+    try:
+        user_id = current_user['user_id']
+        replies = db_manager.get_quick_replies(user_id, category)
+        return {"success": True, "data": replies}
+    except Exception as e:
+        logger.error(f"获取快捷回复失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/quick-replies/categories")
+def get_quick_reply_categories(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取快捷回复分类列表"""
+    try:
+        user_id = current_user['user_id']
+        categories = db_manager.get_quick_reply_categories(user_id)
+        return {"success": True, "data": categories}
+    except Exception as e:
+        logger.error(f"获取快捷回复分类失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/quick-replies")
+def create_quick_reply(
+    data: QuickReplyRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """创建快捷回复"""
+    try:
+        user_id = current_user['user_id']
+        reply_id = db_manager.create_quick_reply(
+            user_id=user_id,
+            title=data.title,
+            content=data.content,
+            category=data.category,
+            sort_order=data.sort_order
+        )
+        if reply_id:
+            return {"success": True, "id": reply_id, "message": "创建成功"}
+        else:
+            raise HTTPException(status_code=500, detail="创建失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建快捷回复失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/quick-replies/{reply_id}")
+def update_quick_reply(
+    reply_id: int,
+    data: QuickReplyUpdateRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """更新快捷回复"""
+    try:
+        user_id = current_user['user_id']
+        success = db_manager.update_quick_reply(
+            reply_id=reply_id,
+            user_id=user_id,
+            title=data.title,
+            content=data.content,
+            category=data.category,
+            sort_order=data.sort_order
+        )
+        if success:
+            return {"success": True, "message": "更新成功"}
+        else:
+            raise HTTPException(status_code=404, detail="快捷回复不存在或更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新快捷回复失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/quick-replies/{reply_id}")
+def delete_quick_reply(
+    reply_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """删除快捷回复"""
+    try:
+        user_id = current_user['user_id']
+        success = db_manager.delete_quick_reply(reply_id, user_id)
+        if success:
+            return {"success": True, "message": "删除成功"}
+        else:
+            raise HTTPException(status_code=404, detail="快捷回复不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除快捷回复失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== WebSocket 实时聊天 ====================
+
+from fastapi import WebSocket, WebSocketDisconnect
+from ws_manager import ws_manager
+
+
+@app.websocket("/ws/chat/{cookie_id}")
+async def websocket_chat(websocket: WebSocket, cookie_id: str):
+    """WebSocket实时聊天端点"""
+    await ws_manager.connect(websocket, cookie_id)
+    try:
+        while True:
+            # 保持连接，接收客户端心跳或消息
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                if message.get('type') == 'ping':
+                    await websocket.send_text(json.dumps({'type': 'pong'}))
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(websocket, cookie_id)
+    except Exception as e:
+        logger.error(f"WebSocket错误: {e}")
+        await ws_manager.disconnect(websocket, cookie_id)
+
+
+@app.websocket("/ws/chat")
+async def websocket_chat_global(websocket: WebSocket):
+    """全局WebSocket端点（接收所有账号消息）"""
+    await ws_manager.connect(websocket, None)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                message = json.loads(data)
+                if message.get('type') == 'ping':
+                    await websocket.send_text(json.dumps({'type': 'pong'}))
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(websocket, None)
+    except Exception as e:
+        logger.error(f"全局WebSocket错误: {e}")
+        await ws_manager.disconnect(websocket, None)
+
+
 # ==================== 备份和恢复 API ====================
 
 @app.get("/backup/export")
