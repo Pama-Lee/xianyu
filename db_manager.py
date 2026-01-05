@@ -5914,6 +5914,7 @@ class DBManager:
             try:
                 cursor = self.conn.cursor()
                 # 查询每个 buyer_id + item_id 组合的最新消息
+                # item_info 表字段: item_title, item_detail (JSON格式，可能包含图片)
                 cursor.execute('''
                 SELECT 
                     m.buyer_id,
@@ -5921,8 +5922,8 @@ class DBManager:
                     m.chat_id,
                     b.buyer_name,
                     b.buyer_avatar,
-                    i.title as item_title,
-                    i.pic as item_image,
+                    i.item_title,
+                    i.item_detail,
                     (SELECT content FROM chat_messages 
                      WHERE cookie_id = m.cookie_id AND buyer_id = m.buyer_id 
                      AND (item_id = m.item_id OR (item_id IS NULL AND m.item_id IS NULL))
@@ -5947,6 +5948,22 @@ class DBManager:
                 for row in cursor.fetchall():
                     buyer_id = row[0]
                     item_id = row[1] or ''
+                    item_title = row[5]
+                    item_detail = row[6]
+                    
+                    # 尝试从 item_detail 中解析图片URL
+                    item_image = None
+                    if item_detail:
+                        try:
+                            import json
+                            detail = json.loads(item_detail) if isinstance(item_detail, str) else item_detail
+                            # 尝试获取图片，支持多种可能的字段名
+                            item_image = detail.get('pic') or detail.get('image') or detail.get('img') or detail.get('picUrl')
+                            if isinstance(item_image, list) and item_image:
+                                item_image = item_image[0]
+                        except:
+                            pass
+                    
                     sessions.append({
                         'id': f"{buyer_id}_{item_id}",
                         'cookie_id': cookie_id,
@@ -5955,8 +5972,8 @@ class DBManager:
                         'chat_id': row[2],
                         'buyer_name': row[3],
                         'buyer_avatar': row[4],
-                        'item_title': row[5],
-                        'item_image': row[6],
+                        'item_title': item_title,
+                        'item_image': item_image,
                         'last_message': row[7],
                         'last_message_time': row[8],
                         'unread_count': row[9] or 0

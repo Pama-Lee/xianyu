@@ -1241,6 +1241,8 @@ class XianyuLive:
                                         logger.info(f'[{msg_time}] 【多数量自动发货图片】第 {i+1}/{len(delivery_contents)} 张已向 {user_url} 发送图片: {image_url}')
                                     else:
                                         logger.info(f'[{msg_time}] 【自动发货图片】已向 {user_url} 发送图片: {image_url}')
+                                    # 保存发货图片消息到数据库
+                                    self._save_bot_message(chat_id, send_user_id, item_id, 'image', image_url, image_url)
 
                                     # 多数量发货时，消息间隔1秒
                                     if len(delivery_contents) > 1 and i < len(delivery_contents) - 1:
@@ -1253,6 +1255,8 @@ class XianyuLive:
                                         logger.info(f'[{msg_time}] 【多数量自动发货】第 {i+1}/{len(delivery_contents)} 条已向 {user_url} 发送发货内容')
                                     else:
                                         logger.info(f'[{msg_time}] 【自动发货】已向 {user_url} 发送发货内容')
+                                    # 保存发货文本消息到数据库
+                                    self._save_bot_message(chat_id, send_user_id, item_id, 'text', delivery_content)
 
                                     # 多数量发货时，消息间隔1秒
                                     if len(delivery_contents) > 1 and i < len(delivery_contents) - 1:
@@ -5287,6 +5291,24 @@ class XianyuLive:
         }
         await ws.send(json.dumps(msg))
 
+    def _save_bot_message(self, chat_id: str, buyer_id: str, item_id: str, 
+                          message_type: str, content: str, image_url: str = None):
+        """保存机器人发送的消息到数据库"""
+        try:
+            from db_manager import db_manager
+            db_manager.save_chat_message(
+                cookie_id=self.cookie_id,
+                chat_id=chat_id,
+                buyer_id=buyer_id,
+                sender_type='seller',
+                message_type=message_type,
+                content=content,
+                item_id=item_id,
+                image_url=image_url
+            )
+        except Exception as e:
+            logger.error(f"保存机器人消息到数据库失败: {self._safe_str(e)}")
+
     async def send_msg(self, ws, cid, toid, text):
         text = {
             "contentType": 1,
@@ -7419,18 +7441,25 @@ class XianyuLive:
                         # 记录发出的图片消息
                         msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         logger.info(f"[{msg_time}] 【{reply_source}图片发出】用户: {send_user_name} (ID: {send_user_id}), 商品({item_id}): 图片 {image_url}")
+                        # 保存机器人发送的图片消息到数据库
+                        self._save_bot_message(chat_id, send_user_id, item_id, 'image', image_url, image_url)
                     except Exception as e:
                         # 图片发送失败，发送错误提示
                         logger.error(f"图片发送失败: {self._safe_str(e)}")
-                        await self.send_msg(websocket, chat_id, send_user_id, "抱歉，图片发送失败，请稍后重试。")
+                        error_msg = "抱歉，图片发送失败，请稍后重试。"
+                        await self.send_msg(websocket, chat_id, send_user_id, error_msg)
                         msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                         logger.error(f"[{msg_time}] 【{reply_source}图片发送失败】用户: {send_user_name} (ID: {send_user_id}), 商品({item_id})")
+                        # 保存错误提示消息到数据库
+                        self._save_bot_message(chat_id, send_user_id, item_id, 'text', error_msg)
                 else:
                     # 普通文本消息
                     await self.send_msg(websocket, chat_id, send_user_id, reply)
                     # 记录发出的消息
                     msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                     logger.info(f"[{msg_time}] 【{reply_source}发出】用户: {send_user_name} (ID: {send_user_id}), 商品({item_id}): {reply}")
+                    # 保存机器人发送的文本消息到数据库
+                    self._save_bot_message(chat_id, send_user_id, item_id, 'text', reply)
             else:
                 msg_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 logger.info(f"[{msg_time}] 【{self.cookie_id}】【系统】未找到匹配的回复规则，不回复")

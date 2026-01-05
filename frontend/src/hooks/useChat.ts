@@ -73,7 +73,7 @@ export function useChat(options: UseChatOptions = {}) {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'ping' }))
           }
-        }, 30000) // 30秒发送一次心跳
+        }, 20000) // 20秒发送一次心跳
       }
 
       ws.onmessage = (event) => {

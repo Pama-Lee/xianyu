@@ -4736,18 +4736,27 @@ async def websocket_chat(websocket: WebSocket, cookie_id: str):
     await ws_manager.connect(websocket, cookie_id)
     try:
         while True:
-            # 保持连接，接收客户端心跳或消息
-            data = await websocket.receive_text()
             try:
-                message = json.loads(data)
-                if message.get('type') == 'ping':
-                    await websocket.send_text(json.dumps({'type': 'pong'}))
-            except json.JSONDecodeError:
-                pass
+                # 设置60秒超时接收消息
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+                try:
+                    message = json.loads(data)
+                    if message.get('type') == 'ping':
+                        await websocket.send_text(json.dumps({'type': 'pong'}))
+                except json.JSONDecodeError:
+                    pass
+            except asyncio.TimeoutError:
+                # 超时后发送ping检查连接是否存活
+                try:
+                    await websocket.send_text(json.dumps({'type': 'ping'}))
+                except Exception:
+                    # 发送失败，连接已断开
+                    break
     except WebSocketDisconnect:
-        await ws_manager.disconnect(websocket, cookie_id)
+        pass
     except Exception as e:
         logger.error(f"WebSocket错误: {e}")
+    finally:
         await ws_manager.disconnect(websocket, cookie_id)
 
 
@@ -4757,17 +4766,27 @@ async def websocket_chat_global(websocket: WebSocket):
     await ws_manager.connect(websocket, None)
     try:
         while True:
-            data = await websocket.receive_text()
             try:
-                message = json.loads(data)
-                if message.get('type') == 'ping':
-                    await websocket.send_text(json.dumps({'type': 'pong'}))
-            except json.JSONDecodeError:
-                pass
+                # 设置60秒超时接收消息
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+                try:
+                    message = json.loads(data)
+                    if message.get('type') == 'ping':
+                        await websocket.send_text(json.dumps({'type': 'pong'}))
+                except json.JSONDecodeError:
+                    pass
+            except asyncio.TimeoutError:
+                # 超时后发送ping检查连接是否存活
+                try:
+                    await websocket.send_text(json.dumps({'type': 'ping'}))
+                except Exception:
+                    # 发送失败，连接已断开
+                    break
     except WebSocketDisconnect:
-        await ws_manager.disconnect(websocket, None)
+        pass
     except Exception as e:
         logger.error(f"全局WebSocket错误: {e}")
+    finally:
         await ws_manager.disconnect(websocket, None)
 
 
