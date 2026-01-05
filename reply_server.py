@@ -4345,6 +4345,59 @@ def get_binding_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/items/{cookie_id}/{item_id}/sku")
+async def get_item_sku_info(
+    cookie_id: str,
+    item_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取商品的SKU/规格信息"""
+    try:
+        from db_manager import db_manager
+        
+        # 获取账号的cookie信息
+        cookie_info = db_manager.get_cookie_by_id(cookie_id)
+        if not cookie_info:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        
+        cookies_str = cookie_info.get('cookies_str', '')
+        if not cookies_str:
+            raise HTTPException(status_code=400, detail="账号cookie为空")
+        
+        # 创建XianyuLive实例获取SKU信息
+        from XianyuAutoAsync import XianyuLive
+        xianyu_instance = XianyuLive(cookies_str, cookie_id)
+        
+        try:
+            result = await xianyu_instance.get_item_sku_info(item_id)
+        finally:
+            await xianyu_instance.close_session()
+        
+        if result.get('success'):
+            return {
+                "success": True,
+                "data": {
+                    "item_id": result.get('item_id'),
+                    "title": result.get('title'),
+                    "has_sku": result.get('has_sku', False),
+                    "sku_list": result.get('sku_list', []),
+                    "spec_names": result.get('spec_names', []),
+                    "spec_values": result.get('spec_values', {})
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "message": result.get('error', '获取SKU信息失败')
+            }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取商品SKU信息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== 备份和恢复 API ====================
 
 @app.get("/backup/export")

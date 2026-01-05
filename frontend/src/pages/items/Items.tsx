@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { CheckSquare, Download, Edit2, ExternalLink, Link, Loader2, Package, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
 import { batchDeleteItems, deleteItem, fetchAllItemsFromAccount, getItems, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec } from '@/api/items'
 import { getAccounts } from '@/api/accounts'
-import { getItemBindings, createBinding, deleteBinding } from '@/api/bindings'
+import { getItemBindings, createBinding, deleteBinding, getItemSkuInfo, type SkuInfo, type SkuItem } from '@/api/bindings'
 import { getCards, type CardData } from '@/api/cards'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
@@ -35,6 +35,11 @@ export function Items() {
   const [bindingSpecValue, setBindingSpecValue] = useState('')
   const [bindingSaving, setBindingSaving] = useState(false)
   const [bindingsLoading, setBindingsLoading] = useState(false)
+  
+  // SKU/规格信息状态
+  const [skuInfo, setSkuInfo] = useState<SkuInfo | null>(null)
+  const [skuLoading, setSkuLoading] = useState(false)
+  const [selectedSku, setSelectedSku] = useState<SkuItem | null>(null)
 
   const loadItems = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) {
@@ -197,6 +202,36 @@ export function Items() {
     }
   }
 
+  // 获取商品SKU信息
+  const handleFetchSku = async (item: Item) => {
+    setSkuLoading(true)
+    setSkuInfo(null)
+    try {
+      const result = await getItemSkuInfo(item.cookie_id, item.item_id)
+      if (result.success && result.data) {
+        setSkuInfo(result.data)
+        if (result.data.has_sku && result.data.sku_list.length > 0) {
+          addToast({ type: 'success', message: `成功获取 ${result.data.sku_list.length} 个规格` })
+        } else {
+          addToast({ type: 'info', message: '该商品没有多规格' })
+        }
+      } else {
+        addToast({ type: 'warning', message: result.message || '获取规格信息失败' })
+      }
+    } catch {
+      addToast({ type: 'error', message: '获取规格信息失败' })
+    } finally {
+      setSkuLoading(false)
+    }
+  }
+  
+  // 选择SKU规格
+  const handleSelectSku = (sku: SkuItem) => {
+    setSelectedSku(sku)
+    setBindingSpecName(sku.spec_name || '')
+    setBindingSpecValue(sku.spec_value || sku.spec_text || '')
+  }
+
   // 打开绑定弹窗
   const handleOpenBinding = async (item: Item) => {
     setBindingItem(item)
@@ -204,6 +239,8 @@ export function Items() {
     setBindingSpecName('')
     setBindingSpecValue('')
     setBindingsLoading(true)
+    setSkuInfo(null)
+    setSelectedSku(null)
 
     // 加载卡券列表
     if (cards.length === 0) {
@@ -285,6 +322,8 @@ export function Items() {
     setBindingCardId('')
     setBindingSpecName('')
     setBindingSpecValue('')
+    setSkuInfo(null)
+    setSelectedSku(null)
   }
 
   // 保存编辑
@@ -700,6 +739,79 @@ export function Items() {
                 )}
               </div>
 
+              {/* 商品规格信息 */}
+              <div className="border-t pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    商品规格 (SKU)
+                  </div>
+                  <button
+                    onClick={() => bindingItem && handleFetchSku(bindingItem)}
+                    disabled={skuLoading}
+                    className="px-3 py-1.5 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {skuLoading ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        获取中...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3 h-3" />
+                        获取规格
+                      </>
+                    )}
+                  </button>
+                </div>
+                
+                {skuInfo ? (
+                  skuInfo.has_sku && skuInfo.sku_list.length > 0 ? (
+                    <div className="space-y-3">
+                      {/* 显示规格名称 */}
+                      {skuInfo.spec_names.length > 0 && (
+                        <div className="text-xs text-gray-500">
+                          规格类型: <span className="font-medium text-blue-600 dark:text-blue-400">{skuInfo.spec_names.join(' / ')}</span>
+                        </div>
+                      )}
+                      <div className="text-xs text-gray-500">
+                        共 {skuInfo.sku_list.length} 个规格，点击选择：
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {skuInfo.sku_list.map((sku, index) => (
+                          <button
+                            key={sku.sku_id || index}
+                            onClick={() => handleSelectSku(sku)}
+                            className={`p-3 text-sm rounded-lg border transition-all text-left ${
+                              selectedSku?.sku_id === sku.sku_id
+                                ? 'bg-blue-500 text-white border-blue-500'
+                                : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-gray-600 hover:border-blue-400'
+                            }`}
+                          >
+                            <div className="font-medium truncate">
+                              {sku.spec_value || sku.spec_text || `规格${index + 1}`}
+                            </div>
+                            <div className={`text-xs mt-1 flex justify-between ${
+                              selectedSku?.sku_id === sku.sku_id ? 'opacity-80' : 'text-gray-500'
+                            }`}>
+                              <span>¥{sku.price}</span>
+                              <span>库存: {sku.stock}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-3 text-gray-400 text-sm bg-slate-50 dark:bg-slate-800 rounded-lg">
+                      该商品没有多规格
+                    </div>
+                  )
+                ) : (
+                  <div className="text-center py-3 text-gray-400 text-sm bg-slate-50 dark:bg-slate-800 rounded-lg">
+                    点击"获取规格"按钮从闲鱼获取商品规格信息
+                  </div>
+                )}
+              </div>
+
               {/* 添加新绑定 */}
               <div className="border-t pt-4">
                 <div className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -726,7 +838,11 @@ export function Items() {
                     />
                   </div>
                   <div className="input-group">
-                    <label className="input-label">规格名称 <span className="text-gray-400 text-xs">(可选)</span></label>
+                    <label className="input-label">
+                      规格名称 
+                      <span className="text-gray-400 text-xs ml-1">(可选)</span>
+                      {selectedSku && <span className="text-blue-500 text-xs ml-1">已从规格填入</span>}
+                    </label>
                     <input
                       type="text"
                       value={bindingSpecName}
@@ -736,7 +852,11 @@ export function Items() {
                     />
                   </div>
                   <div className="input-group">
-                    <label className="input-label">规格值 <span className="text-gray-400 text-xs">(可选)</span></label>
+                    <label className="input-label">
+                      规格值 
+                      <span className="text-gray-400 text-xs ml-1">(可选)</span>
+                      {selectedSku && <span className="text-blue-500 text-xs ml-1">已从规格填入</span>}
+                    </label>
                     <input
                       type="text"
                       value={bindingSpecValue}
@@ -747,7 +867,7 @@ export function Items() {
                   </div>
                 </div>
                 <div className="mt-3 text-xs text-gray-500">
-                  提示：如果商品有多个规格，可以为每个规格创建独立的绑定；不填规格则作为通用绑定。
+                  提示：点击上方"获取规格"可自动获取商品规格，选择规格后会自动填入；也可以手动输入。
                 </div>
               </div>
             </div>

@@ -54,3 +54,34 @@ export const getBindingDetail = async (bindingId: number): Promise<{ success: bo
   return get<{ success: boolean; data: ItemCardBinding }>(`/bindings/${bindingId}`)
 }
 
+// 获取商品SKU/规格信息
+export interface SkuPropertyItem {
+  propertyText: string   // 规格名称，如 "国家"
+  valueText: string      // 规格值，如 "马来西亚"
+  propertyId?: number
+  valueId?: number
+}
+
+export interface SkuItem {
+  sku_id: string
+  spec_name: string       // 规格名称（单规格时）或组合（多规格用/分隔）
+  spec_value: string      // 规格值（单规格时）或组合（多规格用/分隔）
+  spec_text?: string      // 完整的规格文本，如 "国家:马来西亚"
+  price: string           // 价格（元）
+  stock: number           // 库存
+  property_list?: SkuPropertyItem[]  // 原始属性列表（支持多规格）
+}
+
+export interface SkuInfo {
+  item_id: string
+  title: string
+  has_sku: boolean
+  sku_list: SkuItem[]
+  spec_names: string[]                 // 所有规格名称，如 ["国家"]
+  spec_values: Record<string, string[]> // 每个规格名对应的所有值，如 {"国家": ["马来西亚", "泰国", "其他国家"]}
+}
+
+export const getItemSkuInfo = async (cookieId: string, itemId: string): Promise<{ success: boolean; data?: SkuInfo; message?: string }> => {
+  return get<{ success: boolean; data?: SkuInfo; message?: string }>(`/items/${cookieId}/${itemId}/sku`)
+}
+

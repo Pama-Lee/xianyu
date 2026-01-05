@@ -4611,22 +4611,22 @@ class XianyuLive:
             # 多规格商品必须有规格信息才能匹配
             if is_multi_spec and (not spec_name or not spec_value):
                 logger.warning(f"❌ 多规格商品但无规格信息，跳过自动发货")
-                return None
+                    return None
 
             # 智能匹配发货规则：多规格商品只匹配多规格卡券，非多规格商品只匹配非多规格卡券
             delivery_rules = []
 
             if is_multi_spec:
                 # 多规格商品：只匹配多规格发货规则
-                logger.info(f"多规格商品，尝试匹配多规格发货规则: {search_text[:50]}... [{spec_name}:{spec_value}]")
-                delivery_rules = db_manager.get_delivery_rules_by_keyword_and_spec(search_text, spec_name, spec_value)
-                # 过滤只保留多规格卡券
-                delivery_rules = [r for r in delivery_rules if r.get('is_multi_spec')]
-                
-                if delivery_rules:
-                    logger.info(f"✅ 找到匹配的多规格发货规则: {len(delivery_rules)}个")
-                else:
-                    logger.warning(f"❌ 多规格商品未找到匹配的多规格发货规则，跳过自动发货")
+                    logger.info(f"多规格商品，尝试匹配多规格发货规则: {search_text[:50]}... [{spec_name}:{spec_value}]")
+                    delivery_rules = db_manager.get_delivery_rules_by_keyword_and_spec(search_text, spec_name, spec_value)
+                    # 过滤只保留多规格卡券
+                    delivery_rules = [r for r in delivery_rules if r.get('is_multi_spec')]
+                    
+                    if delivery_rules:
+                        logger.info(f"✅ 找到匹配的多规格发货规则: {len(delivery_rules)}个")
+                    else:
+                        logger.warning(f"❌ 多规格商品未找到匹配的多规格发货规则，跳过自动发货")
                     return None
             else:
                 # 非多规格商品：只匹配非多规格发货规则
@@ -8488,6 +8488,126 @@ class XianyuLive:
             "total_saved": total_saved,
             "items": all_items
         }
+
+    async def get_item_sku_info(self, item_id: str):
+        """获取商品的SKU/规格信息（复用 get_item_info 方法）
+        
+        Args:
+            item_id: 商品ID
+            
+        Returns:
+            dict: 包含SKU信息的字典，格式如下:
+            {
+                "success": True,
+                "item_id": "商品ID",
+                "title": "商品标题",
+                "has_sku": True/False,
+                "sku_list": [
+                    {
+                        "sku_id": "SKU ID",
+                        "spec_name": "规格名称",
+                        "spec_value": "规格值",
+                        "price": "价格",
+                        "stock": "库存"
+                    }
+                ],
+                "spec_names": ["颜色", "尺寸"],  # 所有规格名称
+                "spec_values": {                  # 每个规格名称对应的所有值
+                    "颜色": ["红色", "蓝色"],
+                    "尺寸": ["S", "M", "L"]
+                }
+            }
+        """
+        try:
+            # 复用已有的 get_item_info 方法获取商品详情
+            res_json = await self.get_item_info(item_id)
+            
+            # 检查是否有错误
+            if isinstance(res_json, dict) and 'error' in res_json:
+                return {"success": False, "error": res_json.get('error'), "item_id": item_id}
+            
+            # 解析返回数据
+            item_data = res_json.get('data', {})
+            item_do = item_data.get('itemDO', {})
+            title = item_do.get('title', '')
+            
+            # 解析SKU信息 - 从 skuList 或 idleItemSkuList 获取
+            sku_list = []
+            spec_names = set()  # 使用set去重
+            spec_values = {}
+            has_sku = False
+            
+            # 优先使用 idleItemSkuList，然后是 skuList
+            raw_sku_list = item_do.get('idleItemSkuList') or item_do.get('skuList') or []
+            
+            if raw_sku_list:
+                has_sku = True
+                
+                for sku in raw_sku_list:
+                    sku_id = str(sku.get('skuId', ''))
+                    # 价格单位是分，转换为元
+                    price_in_cent = sku.get('priceInCent') or sku.get('price', 0)
+                    price = str(price_in_cent / 100) if price_in_cent else '0'
+                    stock = sku.get('quantity', 0)
+                    
+                    # 解析 propertyList 中的规格信息
+                    property_list = sku.get('propertyList', [])
+                    spec_parts = []  # 用于组合多个规格
+                    
+                    for prop in property_list:
+                        prop_name = prop.get('propertyText', '')  # 如 "国家"
+                        prop_value = prop.get('valueText', '')    # 如 "马来西亚"
+                        
+                        if prop_name:
+                            spec_names.add(prop_name)
+                            # 记录每个规格名对应的所有值
+                            if prop_name not in spec_values:
+                                spec_values[prop_name] = []
+                            if prop_value and prop_value not in spec_values[prop_name]:
+                                spec_values[prop_name].append(prop_value)
+                        
+                        if prop_name and prop_value:
+                            spec_parts.append(f"{prop_name}:{prop_value}")
+                    
+                    # 组合规格文本
+                    spec_text = ' | '.join(spec_parts) if spec_parts else ''
+                    
+                    # 对于单规格商品，直接提取
+                    spec_name = ''
+                    spec_value = ''
+                    if len(property_list) == 1:
+                        spec_name = property_list[0].get('propertyText', '')
+                        spec_value = property_list[0].get('valueText', '')
+                    elif len(property_list) > 1:
+                        # 多规格时，把所有规格名和值组合
+                        spec_name = '/'.join([p.get('propertyText', '') for p in property_list if p.get('propertyText')])
+                        spec_value = '/'.join([p.get('valueText', '') for p in property_list if p.get('valueText')])
+                    
+                    sku_list.append({
+                        'sku_id': sku_id,
+                        'spec_name': spec_name,
+                        'spec_value': spec_value,
+                        'spec_text': spec_text,
+                        'price': price,
+                        'stock': stock,
+                        'property_list': property_list  # 保留原始属性列表
+                    })
+            
+            logger.info(f"成功解析商品SKU信息: {item_id}, 规格数量: {len(sku_list)}, 规格名: {list(spec_names)}")
+            
+            return {
+                "success": True,
+                "item_id": item_id,
+                "title": title,
+                "has_sku": has_sku,
+                "sku_list": sku_list,
+                "spec_names": list(spec_names),
+                "spec_values": spec_values
+            }
+            
+        except Exception as e:
+            logger.error(f"解析商品SKU信息异常: {item_id}, 错误: {self._safe_str(e)}")
+            return {"success": False, "error": str(e), "item_id": item_id}
 
     async def send_image_msg(self, ws, cid, toid, image_url, width=800, height=600, card_id=None):
         """发送图片消息"""
