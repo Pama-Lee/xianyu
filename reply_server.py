@@ -313,6 +313,38 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化 CookieManager（开发环境需要）"""
+    import cookie_manager as cm
+    import asyncio
+    from loguru import logger
+    
+    # 如果 manager 已经初始化，跳过
+    if cm.manager is not None:
+        logger.info("CookieManager 已初始化")
+        return
+    
+    try:
+        # 在 startup 事件中，可以使用 get_running_loop()
+        loop = asyncio.get_running_loop()
+        
+        logger.info("正在初始化 CookieManager...")
+        cm.manager = cm.CookieManager(loop)
+        logger.info("CookieManager 初始化完成")
+    except RuntimeError:
+        # 如果没有运行中的事件循环，创建一个新的
+        logger.warning("未找到运行中的事件循环，创建新的事件循环...")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        cm.manager = cm.CookieManager(loop)
+        logger.info("CookieManager 初始化完成（使用新事件循环）")
+    except Exception as e:
+        logger.error(f"CookieManager 初始化失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
 # 注册刮刮乐远程控制路由
 if CAPTCHA_ROUTER_AVAILABLE:
     app.include_router(captcha_router)
@@ -1449,7 +1481,9 @@ def add_cookie(item: CookieIn, current_user: Dict[str, Any] = Depends(get_curren
         raise
     except Exception as e:
         log_with_user('error', f"添加Cookie失败: {item.id} - {str(e)}", current_user)
-        raise HTTPException(status_code=400, detail=str(e))
+        import traceback
+        logger.error(f"添加Cookie异常详情: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"添加Cookie失败: {str(e)}")
 
 
 # ============ 带子路径的 /cookies/{cid}/xxx 路由必须在 /cookies/{cid} 之前定义 ============
