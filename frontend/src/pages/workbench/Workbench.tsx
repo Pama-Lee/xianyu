@@ -223,7 +223,8 @@ export function Workbench() {
       const result = await sendChatMessage(selectedAccount, selectedSession.buyer_id, {
         message: content,
         message_type: 'text',
-        chat_id: chatId
+        chat_id: chatId,
+        item_id: selectedSession.item_id || undefined
       })
       
       if (result.success) {

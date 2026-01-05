@@ -132,7 +132,7 @@ export const getChatMessages = async (
 export const sendChatMessage = async (
   cookieId: string,
   buyerId: string,
-  data: { message: string; message_type?: string; image_url?: string; chat_id?: string }
+  data: { message: string; message_type?: string; image_url?: string; chat_id?: string; item_id?: string }
 ): Promise<{ success: boolean; message: string }> => {
   return post(`/chat/${cookieId}/${buyerId}/send`, data)
 }

@@ -4524,6 +4524,7 @@ class SendMessageRequestWithChatId(BaseModel):
     message_type: str = "text"
     image_url: Optional[str] = None
     chat_id: Optional[str] = None  # 可选传入 chat_id
+    item_id: Optional[str] = None  # 商品ID
 
 
 @app.post("/chat/{cookie_id}/{buyer_id}/send")
@@ -4578,6 +4579,7 @@ async def send_chat_message(
             sender_type='seller',
             message_type=data.message_type,
             content=data.message if data.message_type == "text" else data.image_url,
+            item_id=data.item_id,
             image_url=data.image_url if data.message_type == "image" else None
         )
         
