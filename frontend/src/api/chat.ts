@@ -25,6 +25,28 @@ export interface BuyerListResponse {
   page_size: number
 }
 
+// 会话类型（按买家+商品分组）
+export interface ChatSession {
+  id: string  // buyer_id + "_" + item_id
+  cookie_id: string
+  buyer_id: string
+  buyer_name: string | null
+  buyer_avatar: string | null
+  item_id: string | null
+  item_title: string | null
+  item_image: string | null
+  chat_id: string
+  last_message: string | null
+  last_message_time: string | null
+  unread_count: number
+}
+
+export interface ChatSessionListResponse {
+  success: boolean
+  sessions: ChatSession[]
+  total: number
+}
+
 // 聊天消息类型
 export interface ChatMessage {
   id: number
@@ -87,6 +109,11 @@ export const updateBuyer = async (
   return put(`/buyers/${cookieId}/${buyerId}`, data)
 }
 
+// 会话列表 API（按买家+商品分组）
+export const getChatSessions = async (cookieId: string): Promise<ChatSessionListResponse> => {
+  return get<ChatSessionListResponse>(`/chat/sessions/${cookieId}`)
+}
+
 // 聊天消息 API
 export const getChatMessages = async (
   cookieId: string,
@@ -105,7 +132,7 @@ export const getChatMessages = async (
 export const sendChatMessage = async (
   cookieId: string,
   buyerId: string,
-  data: { message: string; message_type?: string; image_url?: string }
+  data: { message: string; message_type?: string; image_url?: string; chat_id?: string }
 ): Promise<{ success: boolean; message: string }> => {
   return post(`/chat/${cookieId}/${buyerId}/send`, data)
 }

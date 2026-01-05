@@ -4481,6 +4481,20 @@ class SendMessageRequest(BaseModel):
     image_url: Optional[str] = None
 
 
+@app.get("/chat/sessions/{cookie_id}")
+def get_chat_sessions(
+    cookie_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """获取会话列表（按买家+商品分组）"""
+    try:
+        sessions = db_manager.get_chat_sessions(cookie_id)
+        return {"success": True, "sessions": sessions, "total": len(sessions)}
+    except Exception as e:
+        logger.error(f"获取会话列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/chat/{cookie_id}/{buyer_id}/messages")
 def get_chat_messages(
     cookie_id: str,
@@ -4505,11 +4519,18 @@ def get_chat_messages(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SendMessageRequestWithChatId(BaseModel):
+    message: str
+    message_type: str = "text"
+    image_url: Optional[str] = None
+    chat_id: Optional[str] = None  # 可选传入 chat_id
+
+
 @app.post("/chat/{cookie_id}/{buyer_id}/send")
 async def send_chat_message(
     cookie_id: str,
     buyer_id: str,
-    data: SendMessageRequest,
+    data: SendMessageRequestWithChatId,
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """发送聊天消息"""
@@ -4531,9 +4552,16 @@ async def send_chat_message(
         if not xianyu_instance or not xianyu_instance.ws:
             raise HTTPException(status_code=400, detail="账号未在线或WebSocket未连接，无法发送消息")
         
-        # 发送消息
-        # 需要获取chat_id（从buyer_id构造或从最近的对话中获取）
-        chat_id = buyer_id  # 简化处理，实际可能需要查询
+        # 获取 chat_id：优先使用传入的，否则从数据库查询最近的聊天记录
+        chat_id = data.chat_id
+        if not chat_id:
+            # 从最近的聊天记录中获取 chat_id
+            chat_result = db_manager.get_chat_messages(cookie_id, buyer_id, page_size=1)
+            if chat_result.get('messages'):
+                chat_id = chat_result['messages'][0].get('chat_id')
+        
+        if not chat_id:
+            raise HTTPException(status_code=400, detail="无法获取会话ID，请先等待买家发送消息")
         
         if data.message_type == "text":
             await xianyu_instance.send_msg(xianyu_instance.ws, chat_id, buyer_id, data.message)
