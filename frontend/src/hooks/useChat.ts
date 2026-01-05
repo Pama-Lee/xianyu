@@ -19,6 +19,7 @@ interface UseChatOptions {
   onNewMessage?: (message: WebSocketMessage) => void
   autoReconnect?: boolean
   reconnectInterval?: number
+  enabled?: boolean  // 是否启用 WebSocket 连接
 }
 
 export function useChat(options: UseChatOptions = {}) {
@@ -26,7 +27,8 @@ export function useChat(options: UseChatOptions = {}) {
     cookieId,
     onNewMessage,
     autoReconnect = true,
-    reconnectInterval = 3000
+    reconnectInterval = 3000,
+    enabled = true  // 默认启用
   } = options
 
   const [isConnected, setIsConnected] = useState(false)
@@ -38,16 +40,20 @@ export function useChat(options: UseChatOptions = {}) {
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
+    if (!enabled) return  // 未启用时不建立连接
     
     // 清理现有连接
     if (wsRef.current) {
       wsRef.current.close()
     }
 
+    // 必须有 cookieId 才建立连接（不再支持全局连接）
+    if (!cookieId) {
+      return
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = cookieId 
-      ? `${protocol}//${window.location.host}/ws/chat/${cookieId}`
-      : `${protocol}//${window.location.host}/ws/chat`
+    const wsUrl = `${protocol}//${window.location.host}/ws/chat/${cookieId}`
 
     try {
       const ws = new WebSocket(wsUrl)
@@ -99,10 +105,10 @@ export function useChat(options: UseChatOptions = {}) {
           pingIntervalRef.current = null
         }
 
-        // 自动重连
-        if (autoReconnect && mountedRef.current) {
+        // 自动重连（只在启用且有 cookieId 时）
+        if (autoReconnect && mountedRef.current && enabled && cookieId) {
           reconnectTimerRef.current = setTimeout(() => {
-            if (mountedRef.current) {
+            if (mountedRef.current && enabled) {
               console.log('尝试重新连接WebSocket...')
               connect()
             }
@@ -119,7 +125,7 @@ export function useChat(options: UseChatOptions = {}) {
       console.error('创建WebSocket失败:', e)
       setConnectionError('创建WebSocket连接失败')
     }
-  }, [cookieId, onNewMessage, autoReconnect, reconnectInterval])
+  }, [cookieId, onNewMessage, autoReconnect, reconnectInterval, enabled])
 
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -147,13 +153,19 @@ export function useChat(options: UseChatOptions = {}) {
 
   useEffect(() => {
     mountedRef.current = true
-    connect()
+    
+    if (enabled && cookieId) {
+      connect()
+    } else {
+      // 如果禁用或没有 cookieId，断开连接
+      disconnect()
+    }
 
     return () => {
       mountedRef.current = false
       disconnect()
     }
-  }, [connect, disconnect])
+  }, [connect, disconnect, enabled, cookieId])
 
   return {
     isConnected,

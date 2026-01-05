@@ -44,9 +44,10 @@ export function Workbench() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messageContainerRef = useRef<HTMLDivElement>(null)
 
-  // WebSocket 连接
+  // WebSocket 连接 - 只在选择了账号时才启用
   const { isConnected } = useChat({
     cookieId: selectedAccount || undefined,
+    enabled: !!selectedAccount,  // 只有选中账号时才启用连接
     onNewMessage: useCallback((wsMsg: WebSocketMessage) => {
       // 如果是当前选中买家的消息，添加到消息列表
       if (selectedBuyer && wsMsg.buyer_id === selectedBuyer.buyer_id) {
