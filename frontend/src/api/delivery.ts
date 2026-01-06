@@ -1,4 +1,4 @@
-import { post } from './index'
+import { post } from '@/utils/request'
 
 export interface TestDeliveryRequest {
   cookie_id: string
@@ -22,6 +22,6 @@ export interface TestDeliveryResponse {
 /**
  * 测试自动发货
  */
-export const testDelivery = async (data: TestDeliveryRequest): Promise<TestDeliveryResponse> => {
-  return post<TestDeliveryResponse>('/api/test-delivery', data)
+export const testDelivery = (data: TestDeliveryRequest): Promise<TestDeliveryResponse> => {
+  return post('/api/test-delivery', data)
 }
