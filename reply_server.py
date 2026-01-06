@@ -6784,11 +6784,9 @@ def test_delivery(request: TestDeliveryRequest, current_user: Dict[str, Any] = D
             'send_user_nick': '测试买家'
         }
 
-        # 测试模式：跳过真实订单详情获取，直接测试发货逻辑
+        # 测试模式：检查自动发货条件
         try:
             import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             
             # 构造模拟订单信息（用于测试）
             order_info = {
@@ -6799,25 +6797,51 @@ def test_delivery(request: TestDeliveryRequest, current_user: Dict[str, Any] = D
                 "test_mode": True
             }
 
-            log_with_user('info', f"测试模式：跳过订单详情获取，直接测试发货逻辑", current_user)
+            log_with_user('info', f"测试模式：检查自动发货条件", current_user)
 
-            # 触发自动发货检查
-            result = loop.run_until_complete(instance.handle_auto_delivery(
-                message=test_msg,
-                order_id=request.order_id,
-                chat_id=test_msg['chat_id'],
-                send_user_id=test_msg['send_user_id']
-            ))
+            # 检查是否满足自动发货条件
+            # 1. 检查消息是否包含触发关键词
+            trigger_check = instance._is_auto_delivery_trigger(request.test_message)
+            
+            # 2. 检查订单是否可以自动发货（冷却期检查）
+            can_deliver = instance.can_auto_delivery(request.order_id)
+            
+            # 3. 检查订单是否已发货
+            is_sent = request.order_id in instance.delivery_sent_orders
 
-            loop.close()
+            result = {
+                "trigger_check": trigger_check,
+                "can_deliver": can_deliver,
+                "is_sent": is_sent,
+                "will_trigger": trigger_check and can_deliver and not is_sent
+            }
 
             log_with_user('info', f"测试发货结果: {result}", current_user)
 
+            # 生成详细的测试结果消息
+            if result['will_trigger']:
+                message = "✅ 满足自动发货条件，真实场景下将会自动发货"
+            else:
+                reasons = []
+                if not result['trigger_check']:
+                    reasons.append("消息不包含触发关键词")
+                if not result['can_deliver']:
+                    reasons.append("订单在冷却期内")
+                if result['is_sent']:
+                    reasons.append("订单已发货")
+                message = f"❌ 不满足自动发货条件: {', '.join(reasons)}"
+
             return {
                 "success": True,
-                "message": "测试发货执行完成" if result else "未触发自动发货（可能已发货或不满足条件）",
-                "triggered": bool(result),
-                "order_info": order_info
+                "message": message,
+                "triggered": result['will_trigger'],
+                "order_info": order_info,
+                "test_details": {
+                    "trigger_keyword_match": result['trigger_check'],
+                    "not_in_cooldown": result['can_deliver'],
+                    "not_sent_before": not result['is_sent'],
+                    "test_message": request.test_message
+                }
             }
 
         except Exception as e:
