@@ -77,6 +77,7 @@ class DBManager:
                 username TEXT UNIQUE NOT NULL,
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                is_admin BOOLEAN DEFAULT FALSE,
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -555,6 +556,22 @@ class DBManager:
     def _migrate_database(self, cursor):
         """执行数据库迁移"""
         try:
+            # 检查users表是否存在is_admin列
+            cursor.execute("PRAGMA table_info(users)")
+            user_columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'is_admin' not in user_columns:
+                logger.info("添加users表的is_admin列...")
+                cursor.execute("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT FALSE")
+                logger.info("数据库迁移完成：添加is_admin列")
+                
+                # 将admin用户设置为管理员
+                try:
+                    cursor.execute("UPDATE users SET is_admin = TRUE WHERE username = 'admin'")
+                    logger.info("已将admin用户设置为管理员")
+                except Exception as e:
+                    logger.warning(f"更新admin用户is_admin字段失败: {e}")
+            
             # 检查cards表是否存在image_url列
             cursor.execute("PRAGMA table_info(cards)")
             columns = [column[1] for column in cursor.fetchall()]
@@ -724,10 +741,10 @@ class DBManager:
                 # 首次创建admin用户，设置默认密码
                 default_password_hash = hashlib.sha256("admin123".encode()).hexdigest()
                 cursor.execute('''
-                INSERT INTO users (username, email, password_hash) VALUES
-                ('admin', 'admin@localhost', ?)
+                INSERT INTO users (username, email, password_hash, is_admin) VALUES
+                ('admin', 'admin@localhost', ?, TRUE)
                 ''', (default_password_hash,))
-                logger.info("创建默认admin用户，密码: admin123")
+                logger.info("创建默认admin用户（管理员），密码: admin123")
 
             # 获取admin用户ID，用于历史数据绑定
             self._execute_sql(cursor, "SELECT id FROM users WHERE username = 'admin'")
@@ -2572,14 +2589,20 @@ class DBManager:
             try:
                 cursor = self.conn.cursor()
                 password_hash = hashlib.sha256(password.encode()).hexdigest()
+                
+                # 判断是否为admin用户，自动设置为管理员
+                is_admin = (username.lower() == 'admin')
 
                 cursor.execute('''
-                INSERT INTO users (username, email, password_hash)
-                VALUES (?, ?, ?)
-                ''', (username, email, password_hash))
+                INSERT INTO users (username, email, password_hash, is_admin)
+                VALUES (?, ?, ?, ?)
+                ''', (username, email, password_hash, is_admin))
 
                 self.conn.commit()
-                logger.info(f"创建用户成功: {username} ({email})")
+                if is_admin:
+                    logger.info(f"创建管理员用户成功: {username} ({email})")
+                else:
+                    logger.info(f"创建用户成功: {username} ({email})")
                 return True
             except sqlite3.IntegrityError as e:
                 logger.error(f"创建用户失败，用户名或邮箱已存在: {e}")
