@@ -1928,12 +1928,16 @@ class DBManager:
                 system_model = self.get_system_setting('ai_model') or 'qwen-plus'
                 
                 if result:
-                    # 账号有设置，但如果api_key/base_url/model_name为空，使用系统设置
+                    # 账号有设置，但如果api_key/base_url/model_name为空或无效，使用系统设置
+                    account_api_key = result[2] if result[2] and len(result[2]) > 20 else ''  # API key通常很长，如果太短说明可能是截断的
+                    account_model = result[1] if result[1] and result[1].strip() else ''
+                    account_base_url = result[3] if result[3] and result[3].strip() else ''
+                    
                     return {
                         'ai_enabled': bool(result[0]),
-                        'model_name': result[1] if result[1] else system_model,
-                        'api_key': result[2] if result[2] else system_api_key,
-                        'base_url': result[3] if result[3] else system_base_url,
+                        'model_name': account_model or system_model,
+                        'api_key': account_api_key or system_api_key,
+                        'base_url': account_base_url or system_base_url,
                         'max_discount_percent': result[4],
                         'max_discount_amount': result[5],
                         'max_bargain_rounds': result[6],

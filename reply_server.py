@@ -5354,6 +5354,9 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
         # 获取AI设置（不检查是否启用，只检查配置是否完整）
         settings = db_manager.get_ai_reply_settings(cookie_id)
         
+        logger.info(f"获取到AI设置: ai_enabled={settings.get('ai_enabled')}, model={settings.get('model_name')}, " +
+                   f"base_url={settings.get('base_url')}, api_key_len={len(settings.get('api_key', ''))}")
+        
         if not settings.get('api_key'):
             raise HTTPException(status_code=400, detail='未配置API Key，请先在系统设置或账号AI设置中配置')
         if not settings.get('base_url'):
