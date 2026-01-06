@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { CheckSquare, Download, Edit2, ExternalLink, Link, Loader2, Package, RefreshCw, Search, Square, Trash2, X } from 'lucide-react'
+import { CheckSquare, Download, Edit2, ExternalLink, Link, Loader2, Package, RefreshCw, Search, SendHorizontal, Square, Trash2, X } from 'lucide-react'
 import { batchDeleteItems, deleteItem, fetchAllItemsFromAccount, getItems, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec } from '@/api/items'
 import { getAccounts } from '@/api/accounts'
 import { getItemBindings, createBinding, deleteBinding, getItemSkuInfo, type SkuInfo, type SkuItem } from '@/api/bindings'
 import { getCards, type CardData } from '@/api/cards'
+import { testDelivery } from '@/api/delivery'
 import { useUIStore } from '@/store/uiStore'
 import { PageLoading } from '@/components/common/Loading'
 import { useAuthStore } from '@/store/authStore'
@@ -40,6 +41,9 @@ export function Items() {
   const [skuInfo, setSkuInfo] = useState<SkuInfo | null>(null)
   const [skuLoading, setSkuLoading] = useState(false)
   const [selectedSku, setSelectedSku] = useState<SkuItem | null>(null)
+  
+  // 测试发货状态
+  const [testingDelivery, setTestingDelivery] = useState<string | null>(null) // 存储正在测试的SKU ID
 
   const loadItems = async () => {
     if (!_hasHydrated || !isAuthenticated || !token) {
@@ -230,6 +234,52 @@ export function Items() {
     setSelectedSku(sku)
     setBindingSpecName(sku.spec_name || '')
     setBindingSpecValue(sku.spec_value || sku.spec_text || '')
+  }
+
+  // 测试发货
+  const handleTestDelivery = async (sku: SkuItem, e: React.MouseEvent) => {
+    e.stopPropagation() // 防止触发选择SKU
+    
+    if (!bindingItem) return
+    
+    // 模拟订单ID（实际使用时需要真实订单ID）
+    const mockOrderId = `test_${Date.now()}_${sku.sku_id || 'default'}`
+    
+    setTestingDelivery(sku.sku_id || 'default')
+    
+    try {
+      const result = await testDelivery({
+        cookie_id: bindingItem.cookie_id,
+        order_id: mockOrderId,
+        test_message: '[我已付款，等待你发货]',
+      })
+      
+      if (result.success) {
+        if (result.triggered) {
+          addToast({ 
+            type: 'success', 
+            message: `测试发货成功！${result.order_info ? `商品: ${result.order_info.item_title}` : ''}` 
+          })
+        } else {
+          addToast({ 
+            type: 'warning', 
+            message: result.message || '未触发自动发货（可能已发货或不满足条件）' 
+          })
+        }
+      } else {
+        addToast({ 
+          type: 'error', 
+          message: result.message || '测试发货失败' 
+        })
+      }
+    } catch (error) {
+      addToast({ 
+        type: 'error', 
+        message: '测试发货失败，请检查网络连接' 
+      })
+    } finally {
+      setTestingDelivery(null)
+    }
   }
 
   // 打开绑定弹窗
@@ -776,27 +826,56 @@ export function Items() {
                       <div className="text-xs text-gray-500">
                         共 {skuInfo.sku_list.length} 个规格，点击选择：
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {skuInfo.sku_list.map((sku, index) => (
-                          <button
+                          <div
                             key={sku.sku_id || index}
-                            onClick={() => handleSelectSku(sku)}
-                            className={`p-3 text-sm rounded-lg border transition-all text-left ${
+                            className={`p-3 rounded-lg border transition-all ${
                               selectedSku?.sku_id === sku.sku_id
-                                ? 'bg-blue-500 text-white border-blue-500'
-                                : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-gray-600 hover:border-blue-400'
+                                ? 'bg-blue-50 border-blue-500 dark:bg-blue-900/20'
+                                : 'bg-white dark:bg-slate-700 border-gray-200 dark:border-gray-600'
                             }`}
                           >
-                            <div className="font-medium truncate">
-                              {sku.spec_value || sku.spec_text || `规格${index + 1}`}
+                            <div className="flex items-start justify-between gap-2">
+                              <button
+                                onClick={() => handleSelectSku(sku)}
+                                className="flex-1 text-left"
+                              >
+                                <div className="font-medium text-gray-900 dark:text-white truncate">
+                                  {sku.spec_value || sku.spec_text || `规格${index + 1}`}
+                                </div>
+                                <div className="text-xs mt-1 flex gap-3 text-gray-500 dark:text-gray-400">
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">¥{sku.price}</span>
+                                  <span>库存: {sku.stock}</span>
+                                </div>
+                              </button>
+                              
+                              <button
+                                onClick={(e) => handleTestDelivery(sku, e)}
+                                disabled={testingDelivery === (sku.sku_id || 'default')}
+                                className={`flex-shrink-0 p-2 rounded-lg transition-colors ${
+                                  testingDelivery === (sku.sku_id || 'default')
+                                    ? 'bg-gray-100 dark:bg-gray-600 cursor-not-allowed'
+                                    : 'bg-green-500 hover:bg-green-600 text-white'
+                                }`}
+                                title="测试发货"
+                              >
+                                {testingDelivery === (sku.sku_id || 'default') ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <SendHorizontal className="w-4 h-4" />
+                                )}
+                              </button>
                             </div>
-                            <div className={`text-xs mt-1 flex justify-between ${
-                              selectedSku?.sku_id === sku.sku_id ? 'opacity-80' : 'text-gray-500'
-                            }`}>
-                              <span>¥{sku.price}</span>
-                              <span>库存: {sku.stock}</span>
-                            </div>
-                          </button>
+                            
+                            {selectedSku?.sku_id === sku.sku_id && (
+                              <div className="mt-2 pt-2 border-t border-blue-200 dark:border-blue-800">
+                                <div className="text-xs text-blue-600 dark:text-blue-400">
+                                  ✓ 已选中，规格信息已自动填入下方
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         ))}
                       </div>
                     </div>
