@@ -5436,17 +5436,11 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
             else:
                 # OpenAI兼容API
                 import httpx
-                import ssl
                 
-                # 创建一个禁用SSL验证的httpx客户端（仅用于测试）
-                # 或者使用certifi提供的证书
-                try:
-                    import certifi
-                    http_client = httpx.Client(verify=certifi.where(), timeout=30.0)
-                except Exception:
-                    # 如果certifi有问题，临时禁用SSL验证
-                    logger.warning("使用certifi证书失败，临时禁用SSL验证")
-                    http_client = httpx.Client(verify=False, timeout=30.0)
+                # macOS Python 3.13 SSL证书问题的临时解决方案
+                # 生产环境建议使用中转API或配置正确的证书
+                logger.warning("测试模式：禁用SSL验证（仅用于开发测试）")
+                http_client = httpx.Client(verify=False, timeout=30.0)
                 
                 client = OpenAI(
                     api_key=settings['api_key'],
@@ -5454,18 +5448,20 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
                     http_client=http_client
                 )
                 
-                response = client.chat.completions.create(
-                    model=settings['model_name'],
-                    messages=[
-                        {"role": "system", "content": "你是一个AI助手，请简短回复。"},
-                        {"role": "user", "content": test_message}
-                    ],
-                    max_tokens=50,
-                    temperature=0.7
-                )
-                
-                reply = response.choices[0].message.content.strip()
-                http_client.close()
+                try:
+                    response = client.chat.completions.create(
+                        model=settings['model_name'],
+                        messages=[
+                            {"role": "system", "content": "你是一个AI助手，请简短回复。"},
+                            {"role": "user", "content": test_message}
+                        ],
+                        max_tokens=50,
+                        temperature=0.7
+                    )
+                    
+                    reply = response.choices[0].message.content.strip()
+                finally:
+                    http_client.close()
             
             logger.info(f"AI连接测试成功，收到回复: {reply[:50]}...")
             return {"success": True, "message": "AI连接测试成功！", "reply": reply}
