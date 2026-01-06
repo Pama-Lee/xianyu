@@ -6784,36 +6784,22 @@ def test_delivery(request: TestDeliveryRequest, current_user: Dict[str, Any] = D
             'send_user_nick': '测试买家'
         }
 
-        # 检查订单详情
+        # 测试模式：跳过真实订单详情获取，直接测试发货逻辑
         try:
             import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # 获取订单详情（使用正确的方法名）
-            order_detail = loop.run_until_complete(
-                instance.fetch_order_detail_info(
-                    order_id=request.order_id,
-                    item_id=None,
-                    buyer_id=test_msg['send_user_id']
-                )
-            )
-            
-            if not order_detail:
-                return {
-                    "success": False,
-                    "message": f"无法获取订单详情: {request.order_id}",
-                    "order_detail": None
-                }
-
-            # 提取订单信息
+            # 构造模拟订单信息（用于测试）
             order_info = {
                 "order_id": request.order_id,
-                "item_title": order_detail.get('item_title', order_detail.get('itemTitle', '未知商品')),
-                "buyer_nick": order_detail.get('buyer_nick', order_detail.get('buyerNick', '未知买家')),
-                "status": order_detail.get('order_status', order_detail.get('status', '未知')),
-                "order_detail": order_detail
+                "item_title": "测试商品",
+                "buyer_nick": "测试买家",
+                "status": "待发货",
+                "test_mode": True
             }
+
+            log_with_user('info', f"测试模式：跳过订单详情获取，直接测试发货逻辑", current_user)
 
             # 触发自动发货检查
             result = loop.run_until_complete(instance.handle_auto_delivery(
