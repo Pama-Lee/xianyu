@@ -6735,6 +6735,118 @@ def delete_order(order_id: str, current_user: Dict[str, Any] = Depends(get_curre
         raise HTTPException(status_code=500, detail=f"删除订单失败: {str(e)}")
 
 
+# ==================== 测试发货 API ====================
+
+class TestDeliveryRequest(BaseModel):
+    """测试发货请求"""
+    cookie_id: str
+    order_id: str
+    test_message: Optional[str] = "[我已付款，等待你发货]"
+
+
+@app.post("/api/test-delivery")
+def test_delivery(request: TestDeliveryRequest, current_user: Dict[str, Any] = Depends(get_current_user)):
+    """测试自动发货功能"""
+    try:
+        # 检查cookie是否属于当前用户
+        user_id = current_user['user_id']
+        from db_manager import db_manager
+        user_cookies = db_manager.get_all_cookies(user_id)
+
+        if request.cookie_id not in user_cookies:
+            raise HTTPException(status_code=403, detail="无权限操作该Cookie")
+
+        # 检查cookie_manager是否就绪
+        if cookie_manager.manager is None:
+            raise HTTPException(status_code=500, detail='CookieManager 未就绪')
+
+        # 检查账号是否在运行
+        if request.cookie_id not in cookie_manager.manager.cookies:
+            raise HTTPException(status_code=404, detail='账号不存在或未启动')
+
+        log_with_user('info', f"测试发货: cookie_id={request.cookie_id}, order_id={request.order_id}", current_user)
+
+        # 从XianyuLive实例中获取
+        from XianyuAutoAsync import XianyuLive
+        if not hasattr(XianyuLive, '_instances'):
+            raise HTTPException(status_code=500, detail='XianyuLive实例未就绪')
+
+        instance = XianyuLive._instances.get(request.cookie_id)
+        if not instance:
+            raise HTTPException(status_code=404, detail=f'账号 {request.cookie_id} 的XianyuLive实例未找到，请确保账号已启动')
+
+        # 构造测试消息
+        test_msg = {
+            'order_id': request.order_id,
+            'send_message': request.test_message,
+            'chat_id': f"test_{int(time.time())}",
+            'send_user_id': 'test_buyer',
+            'send_user_nick': '测试买家'
+        }
+
+        # 检查订单详情
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # 获取订单详情
+            order_detail = loop.run_until_complete(instance.get_order_detail(request.order_id))
+            
+            if not order_detail:
+                return {
+                    "success": False,
+                    "message": f"无法获取订单详情: {request.order_id}",
+                    "order_detail": None
+                }
+
+            # 提取订单信息
+            order_info = {
+                "order_id": request.order_id,
+                "item_title": order_detail.get('itemTitle', '未知商品'),
+                "buyer_nick": order_detail.get('buyerNick', '未知买家'),
+                "status": order_detail.get('status', '未知'),
+                "order_detail": order_detail
+            }
+
+            # 触发自动发货检查
+            result = loop.run_until_complete(instance.handle_auto_delivery(
+                message=test_msg,
+                order_id=request.order_id,
+                chat_id=test_msg['chat_id'],
+                send_user_id=test_msg['send_user_id']
+            ))
+
+            loop.close()
+
+            log_with_user('info', f"测试发货结果: {result}", current_user)
+
+            return {
+                "success": True,
+                "message": "测试发货执行完成" if result else "未触发自动发货（可能已发货或不满足条件）",
+                "triggered": bool(result),
+                "order_info": order_info
+            }
+
+        except Exception as e:
+            logger.error(f"测试发货异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                "success": False,
+                "message": f"测试发货失败: {str(e)}",
+                "triggered": False
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_with_user('error', f"测试发货失败: {str(e)}", current_user)
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"测试发货失败: {str(e)}")
+
+
 # ==================== 前端 SPA Catch-All 路由 ====================
 # 必须放在所有 API 路由之后，用于处理前端 SPA 的直接访问
 # 这样用户直接访问 /dashboard、/accounts 等前端路由时，会返回 index.html
