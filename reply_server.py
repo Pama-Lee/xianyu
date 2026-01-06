@@ -6790,8 +6790,14 @@ def test_delivery(request: TestDeliveryRequest, current_user: Dict[str, Any] = D
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-            # 获取订单详情
-            order_detail = loop.run_until_complete(instance.get_order_detail(request.order_id))
+            # 获取订单详情（使用正确的方法名）
+            order_detail = loop.run_until_complete(
+                instance.fetch_order_detail_info(
+                    order_id=request.order_id,
+                    item_id=None,
+                    buyer_id=test_msg['send_user_id']
+                )
+            )
             
             if not order_detail:
                 return {
@@ -6803,9 +6809,9 @@ def test_delivery(request: TestDeliveryRequest, current_user: Dict[str, Any] = D
             # 提取订单信息
             order_info = {
                 "order_id": request.order_id,
-                "item_title": order_detail.get('itemTitle', '未知商品'),
-                "buyer_nick": order_detail.get('buyerNick', '未知买家'),
-                "status": order_detail.get('status', '未知'),
+                "item_title": order_detail.get('item_title', order_detail.get('itemTitle', '未知商品')),
+                "buyer_nick": order_detail.get('buyer_nick', order_detail.get('buyerNick', '未知买家')),
+                "status": order_detail.get('order_status', order_detail.get('status', '未知')),
                 "order_detail": order_detail
             }
 
