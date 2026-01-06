@@ -5342,7 +5342,7 @@ def get_all_ai_reply_settings(current_user: Dict[str, Any] = Depends(get_current
 
 @app.post("/ai-reply-test/{cookie_id}")
 def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_auth)):
-    """测试AI回复功能"""
+    """测试AI回复功能 - 仅用于测试连接，不要求账号启用AI"""
     try:
         # 检查账号是否存在
         if cookie_manager.manager is None:
@@ -5351,40 +5351,122 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
         if cookie_id not in cookie_manager.manager.cookies:
             raise HTTPException(status_code=404, detail='账号不存在')
 
-        # 检查是否启用AI回复
-        if not ai_reply_engine.is_ai_enabled(cookie_id):
-            raise HTTPException(status_code=400, detail='该账号未启用AI回复')
-
-        # 检查AI设置是否完整
+        # 获取AI设置（不检查是否启用，只检查配置是否完整）
         settings = db_manager.get_ai_reply_settings(cookie_id)
+        
         if not settings.get('api_key'):
-            raise HTTPException(status_code=400, detail='未配置API Key，请先在AI设置中配置API Key')
+            raise HTTPException(status_code=400, detail='未配置API Key，请先在系统设置或账号AI设置中配置')
         if not settings.get('base_url'):
-            raise HTTPException(status_code=400, detail='未配置API地址，请先在AI设置中配置API地址')
+            raise HTTPException(status_code=400, detail='未配置API地址，请先在系统设置或账号AI设置中配置')
+        if not settings.get('model_name'):
+            raise HTTPException(status_code=400, detail='未配置模型名称，请先在系统设置或账号AI设置中配置')
 
         # 构造测试数据
-        test_message = test_data.get('message', '你好')
-        test_item_info = {
-            'title': test_data.get('item_title', '测试商品'),
-            'price': test_data.get('item_price', 100),
-            'desc': test_data.get('item_desc', '这是一个测试商品')
-        }
-
-        # 生成测试回复（跳过等待时间）
-        reply = ai_reply_engine.generate_reply(
-            message=test_message,
-            item_info=test_item_info,
-            chat_id=f"test_{int(time.time())}",
-            cookie_id=cookie_id,
-            user_id="test_user",
-            item_id="test_item",
-            skip_wait=True  # 测试时跳过10秒等待
-        )
-
-        if reply:
-            return {"message": "测试成功", "reply": reply}
-        else:
-            raise HTTPException(status_code=400, detail="AI回复生成失败，请检查API Key是否正确、API地址是否可访问")
+        test_message = test_data.get('message', '你好，这是一条测试消息')
+        
+        # 直接调用AI API测试连接
+        try:
+            from openai import OpenAI
+            
+            logger.info(f"测试AI连接: model={settings['model_name']}, base_url={settings['base_url']}, api_key=***{settings['api_key'][-4:]}")
+            
+            # 检查是否为特殊API类型
+            is_gemini = 'gemini' in settings['model_name'].lower()
+            is_dashscope = ('dashscope.aliyuncs.com' in settings['base_url']) and \
+                          (settings['model_name'].lower() in ['custom', '自定义', 'dashscope'])
+            
+            if is_gemini:
+                # Gemini API
+                import requests
+                api_key = settings['api_key']
+                model_name = settings['model_name']
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                
+                payload = {
+                    "contents": [{
+                        "role": "user",
+                        "parts": [{"text": test_message}]
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.7,
+                        "maxOutputTokens": 50
+                    }
+                }
+                
+                response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=30)
+                
+                if response.status_code != 200:
+                    raise Exception(f"Gemini API 请求失败: {response.status_code} - {response.text}")
+                
+                result = response.json()
+                reply = result['candidates'][0]['content']['parts'][0]['text'].strip()
+                
+            elif is_dashscope:
+                # DashScope API
+                import requests
+                base_url = settings['base_url']
+                if '/apps/' in base_url:
+                    app_id = base_url.split('/apps/')[-1].split('/')[0]
+                else:
+                    raise ValueError("DashScope API URL中未找到app_id")
+                
+                url = f"https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion"
+                
+                data = {
+                    "input": {"prompt": test_message},
+                    "parameters": {"max_tokens": 50, "temperature": 0.7}
+                }
+                
+                headers = {
+                    "Authorization": f"Bearer {settings['api_key']}",
+                    "Content-Type": "application/json"
+                }
+                
+                response = requests.post(url, headers=headers, json=data, timeout=30)
+                
+                if response.status_code != 200:
+                    raise Exception(f"DashScope API 请求失败: {response.status_code} - {response.text}")
+                
+                result = response.json()
+                reply = result['output']['text'].strip()
+                
+            else:
+                # OpenAI兼容API
+                client = OpenAI(
+                    api_key=settings['api_key'],
+                    base_url=settings['base_url']
+                )
+                
+                response = client.chat.completions.create(
+                    model=settings['model_name'],
+                    messages=[
+                        {"role": "system", "content": "你是一个AI助手，请简短回复。"},
+                        {"role": "user", "content": test_message}
+                    ],
+                    max_tokens=50,
+                    temperature=0.7
+                )
+                
+                reply = response.choices[0].message.content.strip()
+            
+            logger.info(f"AI连接测试成功，收到回复: {reply[:50]}...")
+            return {"success": True, "message": "AI连接测试成功！", "reply": reply}
+            
+        except Exception as api_error:
+            logger.error(f"AI API调用失败: {api_error}")
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
+            
+            # 提取更友好的错误信息
+            error_msg = str(api_error)
+            if "Incorrect API key" in error_msg or "invalid_api_key" in error_msg:
+                error_msg = "API Key 不正确，请检查配置"
+            elif "Connection" in error_msg or "timeout" in error_msg.lower():
+                error_msg = "无法连接到API服务器，请检查网络和API地址"
+            elif "Model" in error_msg and "not found" in error_msg:
+                error_msg = "模型不存在，请检查模型名称配置"
+            
+            raise HTTPException(status_code=400, detail=f"AI连接测试失败: {error_msg}")
 
     except HTTPException:
         raise
