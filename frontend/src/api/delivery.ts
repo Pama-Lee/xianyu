@@ -41,8 +41,13 @@ export interface DeliveryRuleData {
 /**
  * 获取发货规则列表
  */
-export const getDeliveryRules = (): Promise<any[]> => {
-  return get('/delivery-rules')
+export const getDeliveryRules = async (): Promise<{ success: boolean; data: any[] }> => {
+  try {
+    const data = await get<any[]>('/delivery-rules')
+    return { success: true, data: data || [] }
+  } catch {
+    return { success: false, data: [] }
+  }
 }
 
 /**

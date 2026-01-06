@@ -61,7 +61,7 @@ export function Delivery() {
 
   const handleToggleEnabled = async (rule: DeliveryRule) => {
     try {
-      await updateDeliveryRule(String(rule.id), { enabled: !rule.enabled })
+      await updateDeliveryRule(rule.id, { enabled: !rule.enabled })
       addToast({ type: 'success', message: rule.enabled ? '规则已禁用' : '规则已启用' })
       loadRules()
     } catch {
@@ -72,7 +72,7 @@ export function Delivery() {
   const handleDelete = async (id: number) => {
     if (!confirm('确定要删除这条规则吗？')) return
     try {
-      await deleteDeliveryRule(String(id))
+      await deleteDeliveryRule(id)
       addToast({ type: 'success', message: '删除成功' })
       loadRules()
     } catch {
@@ -125,7 +125,7 @@ export function Delivery() {
       }
 
       if (editingRule) {
-        await updateDeliveryRule(String(editingRule.id), data)
+        await updateDeliveryRule(editingRule.id, data)
         addToast({ type: 'success', message: '规则已更新' })
       } else {
         await addDeliveryRule(data)
