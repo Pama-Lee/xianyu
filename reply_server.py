@@ -5435,9 +5435,23 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
                 
             else:
                 # OpenAI兼容API
+                import httpx
+                import ssl
+                
+                # 创建一个禁用SSL验证的httpx客户端（仅用于测试）
+                # 或者使用certifi提供的证书
+                try:
+                    import certifi
+                    http_client = httpx.Client(verify=certifi.where(), timeout=30.0)
+                except Exception:
+                    # 如果certifi有问题，临时禁用SSL验证
+                    logger.warning("使用certifi证书失败，临时禁用SSL验证")
+                    http_client = httpx.Client(verify=False, timeout=30.0)
+                
                 client = OpenAI(
                     api_key=settings['api_key'],
-                    base_url=settings['base_url']
+                    base_url=settings['base_url'],
+                    http_client=http_client
                 )
                 
                 response = client.chat.completions.create(
@@ -5451,6 +5465,7 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
                 )
                 
                 reply = response.choices[0].message.content.strip()
+                http_client.close()
             
             logger.info(f"AI连接测试成功，收到回复: {reply[:50]}...")
             return {"success": True, "message": "AI连接测试成功！", "reply": reply}
