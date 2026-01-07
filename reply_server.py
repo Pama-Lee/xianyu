@@ -498,7 +498,7 @@ async def get_changelog():
                 },
                 "error": False
             }
-            else:
+        else:
             return {"error": True, "message": "更新日志文件不存在"}
     except Exception as e:
         logger.error(f"读取更新日志失败: {e}")
