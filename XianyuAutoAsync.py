@@ -4651,7 +4651,7 @@ class XianyuLive:
             # 多规格商品必须有规格信息才能匹配
             if is_multi_spec and (not spec_name or not spec_value):
                 logger.warning(f"❌ 多规格商品但无规格信息，跳过自动发货")
-                    return None
+                return None
 
             # 智能匹配发货规则：多规格商品只匹配多规格卡券，非多规格商品只匹配非多规格卡券
             delivery_rules = []

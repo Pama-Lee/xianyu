@@ -5410,7 +5410,7 @@ def test_ai_reply(cookie_id: str, test_data: dict, _: None = Depends(require_aut
                 base_url = settings['base_url']
                 if '/apps/' in base_url:
                     app_id = base_url.split('/apps/')[-1].split('/')[0]
-        else:
+                else:
                     raise ValueError("DashScope API URL中未找到app_id")
                 
                 url = f"https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion"
