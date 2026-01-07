@@ -1159,22 +1159,36 @@ class XianyuLive:
                     multi_quantity_delivery = db_manager.get_item_multi_quantity_delivery_status(self.cookie_id, item_id)
 
                     if multi_quantity_delivery and order_id:
-                        logger.info(f"商品 {item_id} 开启了多数量发货，获取订单详情...")
+                        logger.info(f"商品 {item_id} 开启了多数量发货，检查订单数量...")
                         try:
-                            # 使用现有方法获取订单详情
-                            order_detail = await self.fetch_order_detail_info(order_id, item_id, send_user_id)
-                            if order_detail and order_detail.get('quantity'):
+                            # 【优化】优先从数据库缓存获取数量信息
+                            cached_order = db_manager.get_order_by_id(order_id)
+                            if cached_order and cached_order.get('quantity'):
                                 try:
-                                    order_quantity = int(order_detail['quantity'])
+                                    order_quantity = int(cached_order['quantity'])
                                     if order_quantity > 1:
                                         quantity_to_send = order_quantity
-                                        logger.info(f"从订单详情获取数量: {order_quantity}，将发送 {quantity_to_send} 个卡券")
+                                        logger.info(f"✅ 从数据库缓存获取数量: {order_quantity}，将发送 {quantity_to_send} 个卡券")
                                     else:
-                                        logger.info(f"订单数量为 {order_quantity}，发送单个卡券")
+                                        logger.info(f"数据库缓存数量为 {order_quantity}，发送单个卡券")
                                 except (ValueError, TypeError):
-                                    logger.warning(f"订单数量格式无效: {order_detail.get('quantity')}，发送单个卡券")
+                                    logger.warning(f"订单数量格式无效: {cached_order.get('quantity')}，发送单个卡券")
                             else:
-                                logger.info(f"未获取到订单数量信息，发送单个卡券")
+                                # 缓存中没有数量信息，需要实时获取
+                                logger.warning(f"⚠️ 数据库中无订单 {order_id} 的数量信息，需要实时获取")
+                                order_detail = await self.fetch_order_detail_info(order_id, item_id, send_user_id)
+                                if order_detail and order_detail.get('quantity'):
+                                    try:
+                                        order_quantity = int(order_detail['quantity'])
+                                        if order_quantity > 1:
+                                            quantity_to_send = order_quantity
+                                            logger.info(f"从订单详情获取数量: {order_quantity}，将发送 {quantity_to_send} 个卡券")
+                                        else:
+                                            logger.info(f"订单数量为 {order_quantity}，发送单个卡券")
+                                    except (ValueError, TypeError):
+                                        logger.warning(f"订单数量格式无效: {order_detail.get('quantity')}，发送单个卡券")
+                                else:
+                                    logger.info(f"未获取到订单数量信息，发送单个卡券")
                         except Exception as e:
                             logger.error(f"获取订单详情失败: {self._safe_str(e)}，发送单个卡券")
                     elif not multi_quantity_delivery:
@@ -4382,6 +4396,15 @@ class XianyuLive:
             logger.error(f"【{self.cookie_id}】免拼发货模块调用失败: {self._safe_str(e)}")
             return {"error": f"免拼发货模块调用失败: {self._safe_str(e)}", "order_id": order_id}
 
+    async def _async_update_order_detail(self, order_id: str, item_id: str = None, buyer_id: str = None):
+        """异步更新订单详情（后台任务，不阻塞主流程）"""
+        try:
+            logger.info(f"【{self.cookie_id}】🔄 异步更新订单详情: {order_id}")
+            await self.fetch_order_detail_info(order_id, item_id, buyer_id)
+            logger.info(f"【{self.cookie_id}】✅ 订单详情异步更新完成: {order_id}")
+        except Exception as e:
+            logger.error(f"【{self.cookie_id}】❌ 订单详情异步更新失败: {order_id} - {self._safe_str(e)}")
+
     async def fetch_order_detail_info(self, order_id: str, item_id: str = None, buyer_id: str = None, debug_headless: bool = None):
         """获取订单详情信息（使用独立的锁机制，不受延迟锁影响）"""
         # 使用独立的订单详情锁，不与自动发货锁冲突
@@ -4562,16 +4585,29 @@ class XianyuLive:
             spec_name = None
             spec_value = None
 
-            # 如果有订单ID，获取规格信息（无论是否多规格，都尝试获取用于直接绑定匹配）
+            # 【优化】优先从数据库缓存获取规格信息，避免实时拉取延迟
             if order_id:
                 logger.info(f"获取订单规格信息: {order_id}")
                 try:
-                    order_detail = await self.fetch_order_detail_info(order_id, item_id, send_user_id)
-                    if order_detail and isinstance(order_detail, dict):
-                        spec_name = order_detail.get('spec_name', '')
-                        spec_value = order_detail.get('spec_value', '')
-                        if spec_name and spec_value:
-                            logger.info(f"获取到规格信息: {spec_name} = {spec_value}")
+                    # 先尝试从数据库获取已缓存的订单信息
+                    cached_order = db_manager.get_order_by_id(order_id)
+                    if cached_order and cached_order.get('spec_name') and cached_order.get('spec_value'):
+                        # 使用缓存的规格信息
+                        spec_name = cached_order.get('spec_name', '')
+                        spec_value = cached_order.get('spec_value', '')
+                        logger.info(f"✅ 使用数据库缓存的规格信息: {spec_name} = {spec_value}")
+                        
+                        # 异步触发订单详情更新任务（不等待完成）
+                        asyncio.create_task(self._async_update_order_detail(order_id, item_id, send_user_id))
+                    else:
+                        # 缓存中没有规格信息，需要实时获取（仅在必要时）
+                        logger.warning(f"⚠️ 数据库中无订单 {order_id} 的规格信息，需要实时获取")
+                        order_detail = await self.fetch_order_detail_info(order_id, item_id, send_user_id)
+                        if order_detail and isinstance(order_detail, dict):
+                            spec_name = order_detail.get('spec_name', '')
+                            spec_value = order_detail.get('spec_value', '')
+                            if spec_name and spec_value:
+                                logger.info(f"获取到规格信息: {spec_name} = {spec_value}")
                 except Exception as e:
                     logger.warning(f"获取订单规格信息失败: {self._safe_str(e)}")
 
@@ -4615,7 +4651,7 @@ class XianyuLive:
             # 多规格商品必须有规格信息才能匹配
             if is_multi_spec and (not spec_name or not spec_value):
                 logger.warning(f"❌ 多规格商品但无规格信息，跳过自动发货")
-                return None
+                    return None
 
             # 智能匹配发货规则：多规格商品只匹配多规格卡券，非多规格商品只匹配非多规格卡券
             delivery_rules = []
@@ -7578,7 +7614,7 @@ class XianyuLive:
                     else:
                         logger.warning(f"【{self.cookie_id}】订单状态处理器为None，跳过订单ID提取通知: {order_id}")
 
-                    # 立即获取订单详情信息
+                    # 【优化】异步获取订单详情，不阻塞主流程
                     try:
                         # 先尝试提取用户ID和商品ID用于订单详情获取
                         temp_user_id = None
@@ -7611,16 +7647,14 @@ class XianyuLive:
                                 temp_item_id = self.extract_item_id_from_message(message)
                         except:
                             pass
-
-                        # 调用订单详情获取方法
-                        order_detail = await self.fetch_order_detail_info(order_id, temp_item_id, temp_user_id)
-                        if order_detail:
-                            logger.info(f'[{msg_time}] 【{self.cookie_id}】✅ 订单详情获取成功: {order_id}')
-                        else:
-                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】⚠️ 订单详情获取失败: {order_id}')
+                        
+                        # 【关键优化】创建异步任务获取订单详情，不等待完成，不阻塞主流程
+                        logger.info(f"【{self.cookie_id}】🚀 创建异步任务获取订单详情: {order_id}")
+                        asyncio.create_task(self._async_update_order_detail(order_id, temp_item_id, temp_user_id))
+                        logger.info(f'[{msg_time}] 【{self.cookie_id}】✅ 订单详情异步任务已创建: {order_id}')
 
                     except Exception as detail_e:
-                        logger.error(f'[{msg_time}] 【{self.cookie_id}】❌ 获取订单详情异常: {self._safe_str(detail_e)}')
+                        logger.error(f'[{msg_time}] 【{self.cookie_id}】❌ 创建订单详情异步任务失败: {self._safe_str(detail_e)}')
                 else:
                     logger.warning(f"【{self.cookie_id}】未检测到订单ID")
             except Exception as e:
@@ -7686,6 +7720,93 @@ class XianyuLive:
                 elif red_reminder == '等待卖家发货':
                     user_url = f'https://www.goofish.com/personal?userId={user_id}'
                     logger.info(f'[{msg_time}] 【系统】交易成功 {user_url} 等待卖家发货')
+                    
+                    # 【关键修复】检测到"等待卖家发货"红色提醒时，触发自动发货
+                    # 这是为了处理闲鱼不发送独立付款消息，只推送红色提醒的情况
+                    try:
+                        # 尝试提取订单ID
+                        order_id = self._extract_order_id(message)
+                        
+                        # 如果无法从红色提醒消息中提取订单ID，尝试从chat_id查找最近的订单
+                        if not order_id:
+                            # 提取chat_id
+                            chat_id = None
+                            try:
+                                if isinstance(message, dict) and "1" in message:
+                                    chat_id_raw = message.get("1", "")
+                                    if isinstance(chat_id_raw, str):
+                                        chat_id = chat_id_raw.split('@')[0] if '@' in chat_id_raw else chat_id_raw
+                            except:
+                                pass
+                            
+                            if chat_id:
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】红色提醒消息中无订单ID，尝试通过chat_id {chat_id} 查找最近的订单')
+                                from db_manager import db_manager
+                                
+                                # 通过chat_id查找最近的待发货订单
+                                recent_order = db_manager.get_recent_order_by_chat_id(self.cookie_id, chat_id, status='pending_ship')
+                                if recent_order:
+                                    order_id = recent_order.get('order_id')
+                                    logger.info(f'[{msg_time}] 【{self.cookie_id}】找到chat_id {chat_id} 的最近待发货订单: {order_id}')
+                                else:
+                                    logger.warning(f'[{msg_time}] 【{self.cookie_id}】未找到chat_id {chat_id} 的待发货订单')
+                        
+                        if order_id:
+                            logger.info(f'[{msg_time}] 【{self.cookie_id}】红色提醒触发：检测到订单 {order_id} 等待发货')
+                            
+                            # 获取订单信息，检查状态
+                            from db_manager import db_manager
+                            order_info = db_manager.get_order_by_id(order_id)
+                            
+                            if order_info and order_info.get('status') == 'pending_ship':
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 状态为待发货，准备触发自动发货')
+                                
+                                # 获取商品ID和买家ID
+                                item_id = order_info.get('item_id', '未知商品')
+                                buyer_id = order_info.get('buyer_id', user_id)
+                                
+                                # 从消息中提取chat_id
+                                chat_id = None
+                                try:
+                                    if isinstance(message, dict) and "1" in message:
+                                        chat_id_raw = message.get("1", "")
+                                        if isinstance(chat_id_raw, str):
+                                            chat_id = chat_id_raw.split('@')[0] if '@' in chat_id_raw else chat_id_raw
+                                except:
+                                    pass
+                                
+                                # 如果无法提取chat_id，使用订单信息构造
+                                if not chat_id:
+                                    logger.warning(f'[{msg_time}] 【{self.cookie_id}】无法从消息中提取chat_id，尝试从订单信息获取')
+                                    # 可以尝试从历史消息中查找，或者使用其他方式获取
+                                
+                                # 获取买家名称（用于通知）
+                                buyer_name = order_info.get('buyer_name', '买家')
+                                
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】红色提醒自动发货：订单={order_id}, 商品={item_id}, 买家={buyer_id}')
+                                
+                                # 触发自动发货
+                                await self._handle_auto_delivery(
+                                    websocket=websocket,
+                                    message=message,
+                                    send_user_name=buyer_name,
+                                    send_user_id=buyer_id,
+                                    item_id=item_id,
+                                    chat_id=chat_id or buyer_id,  # 如果没有chat_id，使用buyer_id
+                                    msg_time=msg_time
+                                )
+                                logger.info(f'[{msg_time}] 【{self.cookie_id}】红色提醒自动发货处理完成')
+                                return
+                            else:
+                                if not order_info:
+                                    logger.warning(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 信息不存在，跳过自动发货')
+                                else:
+                                    logger.info(f'[{msg_time}] 【{self.cookie_id}】订单 {order_id} 状态为 {order_info.get("status")}，不是待发货状态，跳过自动发货')
+                        else:
+                            logger.warning(f'[{msg_time}] 【{self.cookie_id}】红色提醒消息中未能提取到订单ID，无法触发自动发货')
+                    except Exception as auto_delivery_e:
+                        logger.error(f'[{msg_time}] 【{self.cookie_id}】红色提醒触发自动发货失败: {self._safe_str(auto_delivery_e)}')
+                    
                     # return
             except:
                 pass

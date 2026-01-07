@@ -4654,6 +4654,93 @@ class DBManager:
                 logger.error(f"获取订单信息失败: {order_id} - {e}")
                 return None
 
+    def get_recent_order_by_chat_id(self, cookie_id: str, chat_id: str, status: str = None, limit_minutes: int = 5):
+        """通过chat_id查找最近的订单（用于红色提醒触发自动发货）
+        
+        Args:
+            cookie_id: Cookie ID
+            chat_id: 聊天ID
+            status: 订单状态筛选（如 'pending_ship'）
+            limit_minutes: 时间限制（分钟），默认5分钟内的订单
+            
+        Returns:
+            dict: 订单信息，如果没有找到返回None
+        """
+        with self.lock:
+            try:
+                cursor = self.conn.cursor()
+                
+                # 首先通过chat_id查找最近的聊天记录，获取buyer_id和item_id
+                cursor.execute('''
+                SELECT DISTINCT buyer_id, item_id
+                FROM chat_messages
+                WHERE cookie_id = ? AND chat_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                ''', (cookie_id, chat_id))
+                
+                chat_row = cursor.fetchone()
+                if not chat_row:
+                    logger.warning(f"未找到chat_id {chat_id} 的聊天记录")
+                    return None
+                
+                buyer_id, item_id = chat_row[0], chat_row[1]
+                logger.info(f"通过chat_id {chat_id} 找到 buyer_id={buyer_id}, item_id={item_id}")
+                
+                # 查找该买家和商品的最近订单
+                query = '''
+                SELECT order_id, item_id, buyer_id, spec_name, spec_value,
+                       quantity, amount, order_status, cookie_id, is_bargain, created_at, updated_at
+                FROM orders
+                WHERE cookie_id = ? AND buyer_id = ?
+                '''
+                params = [cookie_id, buyer_id]
+                
+                # 如果指定了商品ID，添加过滤
+                if item_id:
+                    query += ' AND item_id = ?'
+                    params.append(item_id)
+                
+                # 如果指定了状态，添加过滤
+                if status:
+                    query += ' AND order_status = ?'
+                    params.append(status)
+                
+                # 添加时间限制（最近N分钟）
+                query += f" AND datetime(updated_at) >= datetime('now', '-{limit_minutes} minutes')"
+                
+                # 按更新时间倒序，取最新的一条
+                query += ' ORDER BY updated_at DESC LIMIT 1'
+                
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                
+                if row:
+                    order_info = {
+                        'id': row[0],
+                        'order_id': row[0],
+                        'item_id': row[1],
+                        'buyer_id': row[2],
+                        'spec_name': row[3],
+                        'spec_value': row[4],
+                        'quantity': row[5],
+                        'amount': row[6],
+                        'status': row[7],
+                        'cookie_id': row[8],
+                        'is_bargain': bool(row[9]) if row[9] is not None else False,
+                        'created_at': row[10],
+                        'updated_at': row[11]
+                    }
+                    logger.info(f"找到最近的订单: {row[0]}, 状态: {row[7]}")
+                    return order_info
+                
+                logger.warning(f"未找到符合条件的订单: cookie_id={cookie_id}, buyer_id={buyer_id}, status={status}")
+                return None
+
+            except Exception as e:
+                logger.error(f"通过chat_id查找订单失败: {chat_id} - {e}")
+                return None
+
     def delete_order(self, order_id: str):
         """删除订单"""
         with self.lock:
